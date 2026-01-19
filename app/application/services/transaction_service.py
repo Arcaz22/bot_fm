@@ -148,7 +148,7 @@ class TransactionService:
         if not trxs:
             return "📭 Belum ada riwayat transaksi."
 
-        report = "clock: **5 Transaksi Terakhir:**\n\n"
+        report = "🕓 **5 Transaksi Terakhir:**\n\n"
         for t in trxs:
             # Tentukan icon
             if t.type == 'expense': icon = "🔴"
