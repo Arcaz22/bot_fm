@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 from app.presentation.schemas.telegram import Update, WebhookResponse
 from app.core.di import get_handle_update
 
-router = APIRouter(prefix="/telegram", tags=["telegram"])
+router = APIRouter(tags=["telegram"])
 
 @router.post("/webhook", response_model=WebhookResponse)
 async def telegram_webhook(update: Update, background_tasks: BackgroundTasks,
