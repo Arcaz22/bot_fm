@@ -55,7 +55,8 @@ class MstCategory(Base):
     __tablename__ = "mst_category"
     __table_args__ = (
         UniqueConstraint("owner_telegram_user_id", "name", "type", name="uq_cat_user_name_type"),
-        CheckConstraint("type IN ('income','expense')", name="ck_category_type"),
+
+        CheckConstraint("type IN ('income','expense','transfer')", name="ck_category_type"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

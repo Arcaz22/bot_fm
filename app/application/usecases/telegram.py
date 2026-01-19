@@ -1,4 +1,5 @@
 import logging
+from app.application.services.transaction_service import TransactionService
 from app.presentation.schemas.telegram import Update, Message
 from app.domain.telegram.entities import TelegramUser
 from app.domain.telegram.rules import ensure_active, reset_to_idle
@@ -11,9 +12,11 @@ class HandleTelegramUpdate:
         self,
         user_repo: TelegramUserRepo,
         notifier: TelegramNotifier,
+        trans_service: TransactionService
     ):
         self.user_repo = user_repo
         self.notifier = notifier
+        self.trans_service = trans_service
 
     async def execute(self, update: Update) -> None:
         logger.info(f"Update diterima: {update.model_dump()}")
@@ -30,14 +33,18 @@ class HandleTelegramUpdate:
             logger.info(f"User baru: {chat_id}")
             user = TelegramUser(
                 id=chat_id,
-                first_name=msg.chat.first_name or "Unknown",
+                first_name=msg.chat.first_name,
                 username=getattr(msg.chat, "username", None),
                 is_active=True
             )
 
             await self.user_repo.upsert(user)
 
-        ensure_active(user)
+        try:
+            ensure_active(user)
+        except Exception as e:
+            await self.notifier.send_message(chat_id, f"⛔ {str(e)}")
+            return
 
         if text == "/start":
             await self.notifier.send_message(
@@ -48,10 +55,18 @@ class HandleTelegramUpdate:
             )
             return
 
+        if text == "/saldo":
+            msg = await self.trans_service.get_balance_summary(chat_id)
+            await self.notifier.send_message(chat_id, msg)
+            return
+
+        if text == "/riwayat":
+            msg = await self.trans_service.get_last_transactions(chat_id)
+            await self.notifier.send_message(chat_id, msg)
+            return
+
         if user.current_state == "IDLE":
-            try:
-                amount = float(text)
-                await self.notifier.send_message(chat_id, f"✅ Draft: {amount:,.0f}")
-            except ValueError:
-                await self.notifier.send_message(chat_id, "Saya belum mengerti text. Coba kirim angka.")
+            response_text = await self.trans_service.process_natural_language(chat_id, text)
+
+            await self.notifier.send_message(chat_id, response_text)
             return
