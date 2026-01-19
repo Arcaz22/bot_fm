@@ -34,21 +34,21 @@ services:
     networks:
       - sso_network
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared
-    restart: unless-stopped
-    command: tunnel run
-    volumes:
-      - ./cloudflared:/etc/cloudflared
-    # prod
-    network_mode: host
-    # dev
-    # networks:
-    #   - sso_network
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: cloudflared
+  #   restart: unless-stopped
+  #   command: tunnel run
+  #   volumes:
+  #     - ./cloudflared:/etc/cloudflared
+  #   # prod
+  #   network_mode: host
+  #   # dev
+  #   # networks:
+  #   #   - sso_network
 
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
+  #   # extra_hosts:
+  #   #   - "host.docker.internal:host-gateway"
 
 networks:
   sso_network:
