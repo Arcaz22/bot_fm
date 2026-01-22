@@ -7,6 +7,27 @@ from app.domain.telegram.ports import TelegramUserRepo, TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
+def _detect_intent(text: str) -> str:
+    text_lower = text.lower()
+
+    balance_keywords = [
+        "saldo", "balance", "duit", "uang", "total aset", "total asset",
+        "punya berapa", "sisa berapa", "kekayaan", "dana"
+    ]
+    if any(keyword in text_lower for keyword in balance_keywords):
+        if not any(trx_word in text_lower for trx_word in ["beli", "bayar", "transfer", "kirim", "dapat", "terima"]):
+            return "balance"
+
+    history_keywords = [
+        "riwayat", "history", "transaksi terakhir", "transaksi sebelumnya",
+        "histori", "pencatatan", "catatan transaksi", "5 terakhir"
+    ]
+    if any(keyword in text_lower for keyword in history_keywords):
+        return "history"
+
+    return "transaction"
+
+
 class HandleTelegramUpdate:
     def __init__(
         self,
@@ -55,6 +76,10 @@ class HandleTelegramUpdate:
             )
             return
 
+        # ============================================================
+        # HYBRID INTENT DETECTION
+        # ============================================================
+        # Command legacy (backward compatibility)
         if text == "/saldo":
             msg = await self.trans_service.get_balance_summary(chat_id)
             await self.notifier.send_message(chat_id, msg)
@@ -66,6 +91,21 @@ class HandleTelegramUpdate:
             return
 
         if user.current_state == "IDLE":
+            intent = _detect_intent(text)
+
+            if intent == "balance":
+                logger.info(f"Intent detected: CHECK_BALANCE untuk user {chat_id}")
+                msg = await self.trans_service.get_balance_summary(chat_id)
+                await self.notifier.send_message(chat_id, msg)
+                return
+
+            elif intent == "history":
+                logger.info(f"Intent detected: CHECK_HISTORY untuk user {chat_id}")
+                msg = await self.trans_service.get_last_transactions(chat_id)
+                await self.notifier.send_message(chat_id, msg)
+                return
+
+            logger.info(f"Intent detected: TRANSACTION untuk user {chat_id}, processing via LLM")
             response_text = await self.trans_service.process_natural_language(chat_id, text)
 
             await self.notifier.send_message(chat_id, response_text)
