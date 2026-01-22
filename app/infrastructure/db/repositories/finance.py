@@ -108,19 +108,26 @@ class FinanceRepo:
         return list(result.scalars().all())
 
     # Reporting
-    async def get_wallet_balance(self, wallet_id: int) -> float:
+    async def get_wallet_balance(self, wallet_id: int, user_id: int) -> float:
         """
         Hitung saldo real-time berdasarkan history transaksi
         Rumus: Initial + Income - Expense - Transfer Keluar + Transfer Masuk
         """
-        # Ambil Initial Balance dulu
-        w_stmt = select(MstWallet.initial_balance).where(MstWallet.id == wallet_id)
+        # ✅ Validasi wallet ownership dulu
+        w_stmt = select(MstWallet.initial_balance).where(
+            MstWallet.id == wallet_id,
+            MstWallet.owner_telegram_user_id == user_id  # ← Tambahkan ini
+        )
         w_res = await self.session.execute(w_stmt)
-        initial = w_res.scalar() or 0
+        initial = w_res.scalar()
 
-        # Hitung Income
+        if initial is None:
+            raise ValueError(f"Wallet {wallet_id} tidak ditemukan atau bukan milik user {user_id}")
+
+        # Hitung Income (tambahkan filter user_id)
         inc_stmt = select(func.sum(TrsTransaction.amount)).where(
             TrsTransaction.wallet_id == wallet_id,
+            TrsTransaction.owner_telegram_user_id == user_id,  # ← Tambahkan ini
             TrsTransaction.type == 'income'
         )
         inc = (await self.session.execute(inc_stmt)).scalar() or 0
@@ -128,6 +135,7 @@ class FinanceRepo:
         # Hitung Expense
         exp_stmt = select(func.sum(TrsTransaction.amount)).where(
             TrsTransaction.wallet_id == wallet_id,
+            TrsTransaction.owner_telegram_user_id == user_id,
             TrsTransaction.type == 'expense'
         )
         exp = (await self.session.execute(exp_stmt)).scalar() or 0
@@ -135,6 +143,7 @@ class FinanceRepo:
         # Hitung Transfer Keluar (Dari wallet ini ke orang lain)
         trf_out_stmt = select(func.sum(TrsTransaction.amount)).where(
             TrsTransaction.wallet_id == wallet_id,
+            TrsTransaction.owner_telegram_user_id == user_id,
             TrsTransaction.type == 'transfer'
         )
         trf_out = (await self.session.execute(trf_out_stmt)).scalar() or 0
@@ -142,6 +151,7 @@ class FinanceRepo:
         # Hitung Transfer Masuk (Dari orang lain ke wallet ini)
         trf_in_stmt = select(func.sum(TrsTransaction.amount)).where(
             TrsTransaction.target_wallet_id == wallet_id,
+            TrsTransaction.owner_telegram_user_id == user_id,
             TrsTransaction.type == 'transfer'
         )
         trf_in = (await self.session.execute(trf_in_stmt)).scalar() or 0

@@ -19,7 +19,6 @@ class TransactionService:
         try:
             raw_data = await self.llm.parse_transaction(text)
 
-            # Cek jika LLM mengembalikan sinyal error/bingung
             if "error" in raw_data:
                 return "🤖 Maaf, saya gagal paham. Coba kalimat simpel: 'Makan 20rb pake OVO' atau 'Transfer 50rb dari BCA ke Gopay'"
 
@@ -41,7 +40,6 @@ class TransactionService:
             wallet = await self.repo.get_wallet_by_name(user_id, clean_wallet_name)
 
             if not wallet:
-                # Auto-create source wallet jika belum ada
                 wallet = await self.repo.create_wallet(user_id, clean_wallet_name)
 
             # ==========================================================
@@ -134,7 +132,7 @@ class TransactionService:
 
         for w in wallets:
             # Hitung saldo real-time
-            balance = await self.repo.get_wallet_balance(w.id)
+            balance = await self.repo.get_wallet_balance(w.id, user_id)
             total_assets += balance
             report += f"💳 **{w.name}:** Rp {balance:,.0f}\n"
 
