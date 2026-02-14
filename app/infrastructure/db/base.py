@@ -6,7 +6,8 @@ from app.core.settings import settings
 engine = create_async_engine(
     settings.database_url,
     poolclass=NullPool,
-    echo=False
+    echo=False,
+    connect_args={"ssl": True}
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -16,6 +17,8 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
     expire_on_commit=False
 )
+
+async_session = AsyncSessionLocal
 
 class Base(DeclarativeBase):
     pass

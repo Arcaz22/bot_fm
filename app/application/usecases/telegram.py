@@ -25,6 +25,13 @@ def _detect_intent(text: str) -> str:
     if any(keyword in text_lower for keyword in history_keywords):
         return "history"
 
+    debt_keywords = [
+        "hutang", "piutang", "utang", "berutang", "berhutang", "punya hutang", "punya piutang",
+        "ada hutang", "ada piutang", "berapa hutang", "berapa piutang", "sisa hutang", "sisa piutang"
+    ]
+    if any(keyword in text_lower for keyword in debt_keywords):
+        return "debt"
+
     return "transaction"
 
 
@@ -102,6 +109,15 @@ class HandleTelegramUpdate:
             elif intent == "history":
                 logger.info(f"Intent detected: CHECK_HISTORY untuk user {chat_id}")
                 msg = await self.trans_service.get_last_transactions(chat_id)
+                await self.notifier.send_message(chat_id, msg)
+                return
+
+            elif intent == "debt":
+                logger.info(f"Intent detected: CHECK_DEBT untuk user {chat_id}")
+                from app.core.di import resolve_manage_debt_usecase
+                usecase = await resolve_manage_debt_usecase()
+                result = await usecase.get_debt_summary(chat_id)
+                msg = result.get("summary") or result.get("error", "Gagal mengambil data hutang/piutang")
                 await self.notifier.send_message(chat_id, msg)
                 return
 

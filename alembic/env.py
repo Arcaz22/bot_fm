@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 from app.infrastructure.db.base import Base
-from app.infrastructure.db import models # Pastikan models di-import!
+from app.infrastructure.db import models
 
 load_dotenv()
 

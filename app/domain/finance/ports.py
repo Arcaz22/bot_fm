@@ -1,6 +1,6 @@
-from typing import Protocol, Optional
+from typing import Protocol, Optional, List
 from datetime import date
-from app.infrastructure.db.models import MstWallet, MstCategory, TrsTransaction
+from app.infrastructure.db.models import MstWallet, MstCategory, TrsTransaction, TrsDebt
 
 class FinanceRepoPort(Protocol):
     async def get_wallet_by_name(self, user_id: int, name: str) -> Optional[MstWallet]: ...
@@ -18,6 +18,21 @@ class FinanceRepoPort(Protocol):
         type: str,
         category_id: Optional[int] = None,
         description: str = None,
-        trx_date: date = None,
-        embedding_data: list[float] = None
+        trx_date: date = None
     ) -> TrsTransaction: ...
+
+    # Debt Management
+    async def create_debt(
+        self,
+        creditor_user_id: int,
+        debtor_user_id: int,
+        amount: float,
+        description: str,
+        notes: Optional[str] = None
+    ) -> TrsDebt: ...
+
+    async def get_debts_owed(self, user_id: int, status: str = "pending") -> List[TrsDebt]: ...
+    async def get_debts_to_collect(self, user_id: int, status: str = "pending") -> List[TrsDebt]: ...
+    async def get_debt_by_id(self, debt_id: int) -> Optional[TrsDebt]: ...
+    async def mark_debt_as_paid(self, debt_id: int, transaction_id: Optional[int] = None) -> TrsDebt: ...
+    async def cancel_debt(self, debt_id: int) -> TrsDebt: ...

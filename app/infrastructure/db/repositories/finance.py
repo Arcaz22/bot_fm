@@ -1,8 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_
-from app.infrastructure.db.models import MstWallet, MstCategory, TrsTransaction, SysTelegramUser
+from app.infrastructure.db.models import MstWallet, MstCategory, TrsTransaction, TrsDebt, SysTelegramUser
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime
 
 class FinanceRepo:
     def __init__(self, session: AsyncSession):
@@ -70,7 +70,6 @@ class FinanceRepo:
         target_wallet_id: Optional[int] = None,
         description: str = None,
         trx_date: date = None,
-        embedding_data: list[float] = None
     ) -> TrsTransaction:
 
         if not trx_date:
@@ -85,8 +84,7 @@ class FinanceRepo:
             type=type,
             amount=amount,
             description=description,
-            trx_date=trx_date,
-            embedding_data=embedding_data
+            trx_date=trx_date
         )
         self.session.add(trx)
         await self.session.commit()
@@ -157,3 +155,118 @@ class FinanceRepo:
         trf_in = (await self.session.execute(trf_in_stmt)).scalar() or 0
 
         return float(initial) + float(inc) - float(exp) - float(trf_out) + float(trf_in)
+
+    # =========================================================
+    # DEBT MANAGEMENT
+    # =========================================================
+
+    async def create_debt(
+        self,
+        creditor_user_id: int,
+        debtor_user_id: int,
+        amount: float,
+        description: str,
+        notes: Optional[str] = None
+    ) -> TrsDebt:
+        """
+        Create hutang-piutang record
+        creditor = yang bayar duluan (punya piutang)
+        debtor = yang ngutang (punya hutang)
+        """
+        debt = TrsDebt(
+            creditor_user_id=creditor_user_id,
+            debtor_user_id=debtor_user_id,
+            amount=amount,
+            description=description,
+            status="pending",
+            notes=notes
+        )
+        self.session.add(debt)
+        await self.session.commit()
+        await self.session.refresh(debt)
+        return debt
+
+    async def get_debts_owed(self, user_id: int, status: str = "pending") -> List[TrsDebt]:
+        """
+        Get list hutang yang dimiliki user (user sebagai debtor)
+        Return: hutang yang harus dibayar user ini
+        """
+        from sqlalchemy.orm import joinedload
+
+        stmt = select(TrsDebt).options(
+            joinedload(TrsDebt.creditor),
+            joinedload(TrsDebt.debtor)
+        ).where(
+            TrsDebt.debtor_user_id == user_id,
+            TrsDebt.status == status
+        ).order_by(desc(TrsDebt.created_at))
+
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_debts_to_collect(self, user_id: int, status: str = "pending") -> List[TrsDebt]:
+        """
+        Get list piutang yang dimiliki user (user sebagai creditor)
+        Return: piutang yang harus dikasih ke user ini
+        """
+        from sqlalchemy.orm import joinedload
+
+        stmt = select(TrsDebt).options(
+            joinedload(TrsDebt.creditor),
+            joinedload(TrsDebt.debtor)
+        ).where(
+            TrsDebt.creditor_user_id == user_id,
+            TrsDebt.status == status
+        ).order_by(desc(TrsDebt.created_at))
+
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_debt_by_id(self, debt_id: int) -> Optional[TrsDebt]:
+        """Get debt by ID"""
+        from sqlalchemy.orm import joinedload
+
+        stmt = select(TrsDebt).options(
+            joinedload(TrsDebt.creditor),
+            joinedload(TrsDebt.debtor)
+        ).where(TrsDebt.id == debt_id)
+
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
+    async def mark_debt_as_paid(
+        self,
+        debt_id: int,
+        transaction_id: Optional[int] = None
+    ) -> TrsDebt:
+        """Mark debt sebagai lunas"""
+        debt = await self.get_debt_by_id(debt_id)
+        if not debt:
+            raise ValueError(f"Debt {debt_id} tidak ditemukan")
+
+        if debt.status != "pending":
+            raise ValueError(f"Debt sudah {debt.status}")
+
+        debt.status = "paid"
+        debt.paid_at = datetime.now()
+        debt.related_transaction_id = transaction_id
+
+        await self.session.commit()
+        await self.session.refresh(debt)
+        return debt
+
+    async def cancel_debt(self, debt_id: int) -> TrsDebt:
+        """Cancel debt (misalnya salah create)"""
+        debt = await self.get_debt_by_id(debt_id)
+        if not debt:
+            raise ValueError(f"Debt {debt_id} tidak ditemukan")
+
+        if debt.status == "paid":
+            raise ValueError("Debt sudah paid, tidak bisa dicancel")
+
+        debt.status = "cancelled"
+
+        await self.session.commit()
+        await self.session.refresh(debt)
+        return debt
+
