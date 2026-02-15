@@ -17,10 +17,6 @@ class Settings(BaseSettings):
         elif url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
 
-        if "sslmode" not in url:
-            separator = "&" if "?" in url else "?"
-            url = f"{url}{separator}sslmode=require"
-
         return url
 
     model_config = SettingsConfigDict(
