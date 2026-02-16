@@ -49,11 +49,14 @@ class HandleTelegramUpdate:
     async def execute(self, update: Update) -> None:
         logger.info(f"Update diterima: {update.model_dump()}")
         if not update.message:
+            logger.warning("No message in update")
             return
 
         msg: Message = update.message
         chat_id = msg.chat.id
         text = (msg.text or "").strip()
+
+        logger.info(f"Processing message from {chat_id}: {text}")
 
         user = await self.user_repo.get(chat_id)
 

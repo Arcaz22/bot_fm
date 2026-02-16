@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str
     APP_PORT: int
     TELEGRAM_TOKEN: str
+    WEBHOOK_URL: str | None = None
 
     DATABASE_URL: str = Field(..., alias="DATABASE_URL")
 
