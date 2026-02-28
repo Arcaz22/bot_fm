@@ -16,19 +16,42 @@ class GeminiLLM(LLMPort):
     async def parse_transaction(self, text: str) -> dict:
         system_prompt = """
         You are a financial assistant. Extract transaction details from the user text.
-        Return ONLY valid JSON with these keys:
-        - amount (number)
-        - category (string, short category name. e.g. "Food", "Transport")
-        - wallet_name (string. The SOURCE wallet. e.g. "BCA", "Cash". Default "BCA")
-        - target_wallet_name (string. ONLY for TRANSFER. The DESTINATION wallet. e.g. "Gopay", "Bibit")
-        - description (string, what did they buy? or "Transfer to Gopay")
-        - transaction_type (string. "EXPENSE", "INCOME", or "TRANSFER")
+                Return ONLY valid JSON with these keys:
+                - amount (number)
+                - category (string, short category name. e.g. "Food", "Transport")
+                - wallet_name (string. The SOURCE wallet. e.g. "BCA", "Cash". Default "BCA")
+                - target_wallet_name (string. ONLY for TRANSFER. The DESTINATION wallet. e.g. "Gopay", "Bibit")
+                - description (string, what did they buy? or "Transfer to Gopay")
+                - transaction_type (string. "EXPENSE", "INCOME", or "TRANSFER")
 
-        Example 1 (Expense): "Makan 15rb pake gopay"
-        Output: {"amount": 15000, "category": "Food", "wallet_name": "Gopay", "transaction_type": "EXPENSE", "description": "Makan"}
+                Debt-related (hutang-piutang) keys:
+                - debt_action (string. One of: "NONE", "BORROW", "LEND", "PAY")
+                    - "BORROW"  = user is borrowing money from someone (user becomes debtor)
+                    - "LEND"    = user is lending money to someone (user becomes creditor)
+                    - "PAY"     = user is paying back an existing debt
+                    - "NONE"    = not related to debt
+                - counterparty_name (string or null). The other person's name/username, e.g. "Sabil".
 
-        Example 2 (Transfer): "Transfer 50rb dari BCA ke Gopay"
-        Output: {"amount": 50000, "category": "Transfer", "wallet_name": "BCA", "target_wallet_name": "Gopay", "transaction_type": "TRANSFER", "description": "Topup Gopay"}
+                Rules for Indonesian language examples:
+                - Phrases like "pinjam 50k ke Sabil", "minjem duit ke Sabil" → debt_action = "BORROW", counterparty_name = "Sabil".
+                - Phrases like "pinjemin 50k ke Sabil", "ngasih pinjem 50k ke Sabil" → debt_action = "LEND", counterparty_name = "Sabil".
+                - Phrases like "bayar hutang ke Sabil 50k", "lunasin hutang ke Sabil" → debt_action = "PAY", counterparty_name = "Sabil".
+                - If there is no clear debt context → debt_action = "NONE" and counterparty_name = null.
+
+                Example 1 (Expense): "Makan 15rb pake gopay"
+                Output: {"amount": 15000, "category": "Food", "wallet_name": "Gopay", "transaction_type": "EXPENSE", "description": "Makan", "debt_action": "NONE", "counterparty_name": null}
+
+                Example 2 (Transfer): "Transfer 50rb dari BCA ke Gopay"
+                Output: {"amount": 50000, "category": "Transfer", "wallet_name": "BCA", "target_wallet_name": "Gopay", "transaction_type": "TRANSFER", "description": "Topup Gopay", "debt_action": "NONE", "counterparty_name": null}
+
+                Example 3 (Borrowing money): "Pinjam 50k ke Sabil pake BCA"
+                Output: {"amount": 50000, "category": "Loan", "wallet_name": "BCA", "transaction_type": "INCOME", "description": "Pinjam dari Sabil", "debt_action": "BORROW", "counterparty_name": "Sabil"}
+
+                Example 4 (Lending money): "Pinjemin 50k ke Sabil dari BCA"
+                Output: {"amount": 50000, "category": "Loan", "wallet_name": "BCA", "transaction_type": "EXPENSE", "description": "Pinjemin ke Sabil", "debt_action": "LEND", "counterparty_name": "Sabil"}
+
+                Example 5 (Paying back debt): "Bayar hutang ke Sabil 50k dari BCA"
+                Output: {"amount": 50000, "category": "Loan Payment", "wallet_name": "BCA", "transaction_type": "EXPENSE", "description": "Bayar hutang ke Sabil", "debt_action": "PAY", "counterparty_name": "Sabil"}
         """
 
         full_prompt = f"{system_prompt}\n\nUser Text: {text}"
@@ -49,13 +72,6 @@ class GeminiLLM(LLMPort):
             raise e
 
     async def parse_receipt_image(self, image_bytes: bytes, context: Optional[str] = None) -> dict:
-        """
-        Parse receipt/nota image menggunakan Gemini Vision API
-
-        Args:
-            image_bytes: Raw bytes dari gambar
-            context: Konteks tambahan dari user (misal: "bayar pake BCA", "belanja bulanan")
-        """
         system_prompt = """
         You are a receipt/nota OCR expert. Analyze the receipt image and extract all transaction details.
 
@@ -91,15 +107,12 @@ class GeminiLLM(LLMPort):
         - "PPN", "TAX" = Tax
         """
 
-        # Tambahkan context dari user jika ada
         if context:
             system_prompt += f"\n\nAdditional context from user: {context}"
 
         try:
-            # Encode image to base64
             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
 
-            # Buat content dengan image
             response = await self.model.generate_content_async([
                 system_prompt,
                 {
@@ -111,7 +124,6 @@ class GeminiLLM(LLMPort):
             raw_text = response.text
             logger.debug(f"Gemini Vision raw response: {raw_text}")
 
-            # Clean dan parse JSON
             cleaned_text = raw_text.replace("```json", "").replace("```", "").strip()
 
             return json.loads(cleaned_text)

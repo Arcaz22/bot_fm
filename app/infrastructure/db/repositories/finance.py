@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_
+from sqlalchemy.orm import joinedload
 from app.infrastructure.db.models import MstWallet, MstCategory, TrsTransaction, TrsDebt, SysTelegramUser
 from typing import List, Optional
 from datetime import date, datetime
@@ -8,7 +9,6 @@ class FinanceRepo:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    # Wallet
     async def get_wallet_by_name(self, user_id: int, name: str) -> Optional[MstWallet]:
         stmt = select(MstWallet).where(
             MstWallet.owner_telegram_user_id == user_id,
@@ -37,7 +37,16 @@ class FinanceRepo:
         await self.session.refresh(wallet)
         return wallet
 
-   # Category
+    async def find_user_by_name_or_username(self, query: str) -> Optional[SysTelegramUser]:
+        stmt = select(SysTelegramUser).where(
+            or_(
+                SysTelegramUser.first_name.ilike(query),
+                SysTelegramUser.username.ilike(query)
+            )
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
     async def get_category_by_name(self, user_id: int, name: str, type: str) -> Optional[MstCategory]:
         stmt = select(MstCategory).where(
             MstCategory.owner_telegram_user_id == user_id,
@@ -59,13 +68,12 @@ class FinanceRepo:
         await self.session.refresh(category)
         return category
 
-    # Transaction
     async def create_transaction(
         self,
         user_id: int,
         wallet_id: int,
         amount: float,
-        type: str,  # 'income', 'expense', 'transfer'
+        type: str,
         category_id: Optional[int] = None,
         target_wallet_id: Optional[int] = None,
         description: str = None,
@@ -73,7 +81,6 @@ class FinanceRepo:
     ) -> TrsTransaction:
 
         if not trx_date:
-            from datetime import date
             trx_date = date.today()
 
         trx = TrsTransaction(
@@ -92,8 +99,6 @@ class FinanceRepo:
         return trx
 
     async def get_recent_transactions(self, user_id: int, limit: int = 5) -> List[TrsTransaction]:
-        from sqlalchemy.orm import joinedload
-
         stmt = select(TrsTransaction).options(
             joinedload(TrsTransaction.wallet),
             joinedload(TrsTransaction.category),
@@ -105,16 +110,11 @@ class FinanceRepo:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    # Reporting
     async def get_wallet_balance(self, wallet_id: int, user_id: int) -> float:
-        """
-        Hitung saldo real-time berdasarkan history transaksi
-        Rumus: Initial + Income - Expense - Transfer Keluar + Transfer Masuk
-        """
-        # ✅ Validasi wallet ownership dulu
+
         w_stmt = select(MstWallet.initial_balance).where(
             MstWallet.id == wallet_id,
-            MstWallet.owner_telegram_user_id == user_id  # ← Tambahkan ini
+            MstWallet.owner_telegram_user_id == user_id
         )
         w_res = await self.session.execute(w_stmt)
         initial = w_res.scalar()
@@ -122,15 +122,13 @@ class FinanceRepo:
         if initial is None:
             raise ValueError(f"Wallet {wallet_id} tidak ditemukan atau bukan milik user {user_id}")
 
-        # Hitung Income (tambahkan filter user_id)
         inc_stmt = select(func.sum(TrsTransaction.amount)).where(
             TrsTransaction.wallet_id == wallet_id,
-            TrsTransaction.owner_telegram_user_id == user_id,  # ← Tambahkan ini
+            TrsTransaction.owner_telegram_user_id == user_id,
             TrsTransaction.type == 'income'
         )
         inc = (await self.session.execute(inc_stmt)).scalar() or 0
 
-        # Hitung Expense
         exp_stmt = select(func.sum(TrsTransaction.amount)).where(
             TrsTransaction.wallet_id == wallet_id,
             TrsTransaction.owner_telegram_user_id == user_id,
@@ -138,7 +136,6 @@ class FinanceRepo:
         )
         exp = (await self.session.execute(exp_stmt)).scalar() or 0
 
-        # Hitung Transfer Keluar (Dari wallet ini ke orang lain)
         trf_out_stmt = select(func.sum(TrsTransaction.amount)).where(
             TrsTransaction.wallet_id == wallet_id,
             TrsTransaction.owner_telegram_user_id == user_id,
@@ -146,7 +143,6 @@ class FinanceRepo:
         )
         trf_out = (await self.session.execute(trf_out_stmt)).scalar() or 0
 
-        # Hitung Transfer Masuk (Dari orang lain ke wallet ini)
         trf_in_stmt = select(func.sum(TrsTransaction.amount)).where(
             TrsTransaction.target_wallet_id == wallet_id,
             TrsTransaction.owner_telegram_user_id == user_id,
@@ -156,10 +152,6 @@ class FinanceRepo:
 
         return float(initial) + float(inc) - float(exp) - float(trf_out) + float(trf_in)
 
-    # =========================================================
-    # DEBT MANAGEMENT
-    # =========================================================
-
     async def create_debt(
         self,
         creditor_user_id: int,
@@ -168,11 +160,6 @@ class FinanceRepo:
         description: str,
         notes: Optional[str] = None
     ) -> TrsDebt:
-        """
-        Create hutang-piutang record
-        creditor = yang bayar duluan (punya piutang)
-        debtor = yang ngutang (punya hutang)
-        """
         debt = TrsDebt(
             creditor_user_id=creditor_user_id,
             debtor_user_id=debtor_user_id,
@@ -187,12 +174,6 @@ class FinanceRepo:
         return debt
 
     async def get_debts_owed(self, user_id: int, status: str = "pending") -> List[TrsDebt]:
-        """
-        Get list hutang yang dimiliki user (user sebagai debtor)
-        Return: hutang yang harus dibayar user ini
-        """
-        from sqlalchemy.orm import joinedload
-
         stmt = select(TrsDebt).options(
             joinedload(TrsDebt.creditor),
             joinedload(TrsDebt.debtor)
@@ -205,11 +186,6 @@ class FinanceRepo:
         return list(result.scalars().all())
 
     async def get_debts_to_collect(self, user_id: int, status: str = "pending") -> List[TrsDebt]:
-        """
-        Get list piutang yang dimiliki user (user sebagai creditor)
-        Return: piutang yang harus dikasih ke user ini
-        """
-        from sqlalchemy.orm import joinedload
 
         stmt = select(TrsDebt).options(
             joinedload(TrsDebt.creditor),
@@ -223,8 +199,6 @@ class FinanceRepo:
         return list(result.scalars().all())
 
     async def get_debt_by_id(self, debt_id: int) -> Optional[TrsDebt]:
-        """Get debt by ID"""
-        from sqlalchemy.orm import joinedload
 
         stmt = select(TrsDebt).options(
             joinedload(TrsDebt.creditor),
@@ -239,7 +213,6 @@ class FinanceRepo:
         debt_id: int,
         transaction_id: Optional[int] = None
     ) -> TrsDebt:
-        """Mark debt sebagai lunas"""
         debt = await self.get_debt_by_id(debt_id)
         if not debt:
             raise ValueError(f"Debt {debt_id} tidak ditemukan")
@@ -255,8 +228,21 @@ class FinanceRepo:
         await self.session.refresh(debt)
         return debt
 
+    async def get_latest_open_debt_between(
+        self,
+        creditor_user_id: int,
+        debtor_user_id: int
+    ) -> Optional[TrsDebt]:
+        stmt = select(TrsDebt).where(
+            TrsDebt.creditor_user_id == creditor_user_id,
+            TrsDebt.debtor_user_id == debtor_user_id,
+            TrsDebt.status == "pending",
+        ).order_by(desc(TrsDebt.created_at)).limit(1)
+
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
     async def cancel_debt(self, debt_id: int) -> TrsDebt:
-        """Cancel debt (misalnya salah create)"""
         debt = await self.get_debt_by_id(debt_id)
         if not debt:
             raise ValueError(f"Debt {debt_id} tidak ditemukan")

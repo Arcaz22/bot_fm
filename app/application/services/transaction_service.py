@@ -13,93 +13,133 @@ class TransactionService:
         self.repo = repo
 
     async def process_natural_language(self, user_id: int, text: str) -> str:
-        # ==========================================================
-        # 1. AI EXTRACTION & DTO VALIDATION
-        # ==========================================================
         try:
             raw_data = await self.llm.parse_transaction(text)
-
             if "error" in raw_data:
                 return "🤖 Maaf, saya gagal paham. Coba kalimat simpel: 'Makan 20rb pake OVO' atau 'Transfer 50rb dari BCA ke Gopay'"
 
             data = ExtractedTransaction(**raw_data)
+
+            try:
+                tl = text.lower()
+                if getattr(data, "debt_action", "NONE") == "NONE":
+                    if "bayar hutang" in tl or "lunasin hutang" in tl:
+                        data.debt_action = "PAY"
+            except Exception:
+                pass
+
         except Exception as e:
             logger.error(f"LLM/DTO Error: {e}")
             return "Terjadi kesalahan saat memproses pesan (Parsing Error)."
 
         try:
-            # ==========================================================
-            # 2. BUSINESS RULES VALIDATION
-            # ==========================================================
             rules.validate_transaction_amount(data.amount)
 
-            # ==========================================================
-            # 3. HANDLE SOURCE WALLET (Dompet Asal)
-            # ==========================================================
             clean_wallet_name = rules.normalize_wallet_name(data.wallet_name)
             wallet = await self.repo.get_wallet_by_name(user_id, clean_wallet_name)
 
             if not wallet:
                 wallet = await self.repo.create_wallet(user_id, clean_wallet_name)
 
-            # ==========================================================
-            # 4. HANDLE TARGET WALLET (Khusus TRANSFER)
-            # ==========================================================
             target_wallet = None
             if data.transaction_type == "TRANSFER" and data.target_wallet_name:
                 clean_target_name = rules.normalize_wallet_name(data.target_wallet_name)
 
-                # Cek apakah wallet tujuan ada?
                 target_wallet = await self.repo.get_wallet_by_name(user_id, clean_target_name)
 
-                # Auto-create target wallet jika belum ada
                 if not target_wallet:
                     target_wallet = await self.repo.create_wallet(user_id, clean_target_name)
 
-            # ==========================================================
-            # 5. HANDLE CATEGORY
-            # ==========================================================
             category = None
             if data.category:
-                # Cari category, pastikan typenya sesuai (EXPENSE/INCOME/TRANSFER)
-                # Gunakan lowercase untuk konsistensi DB
                 cat_type = data.transaction_type.lower()
                 category = await self.repo.get_category_by_name(
                     user_id, data.category, cat_type
                 )
 
-                # Auto-create category jika belum ada
                 if not category:
                     category = await self.repo.create_category(
                         user_id, data.category, cat_type
                     )
 
-            # ==========================================================
-            # 6. SIMPAN TRANSAKSI (REPOSITORY)
-            # ==========================================================
             trx = await self.repo.create_transaction(
                 user_id=user_id,
                 wallet_id=wallet.id,
-                # Masukkan ID target wallet jika ada (utk Transfer)
                 target_wallet_id=target_wallet.id if target_wallet else None,
                 category_id=category.id if category else None,
                 amount=data.amount,
-                type=data.transaction_type.lower(), # 'expense', 'income', 'transfer'
+                type=data.transaction_type.lower(),
                 description=data.description
             )
 
-            # ==========================================================
-            # 7. FORMAT RESPONSE
-            # ==========================================================
-            # Tentukan Icon
-            if data.transaction_type == "EXPENSE":
-                icon = "🔴" # Merah untuk keluar
-            elif data.transaction_type == "INCOME":
-                icon = "🟢" # Hijau untuk masuk
-            else:
-                icon = "🔄" # Putar untuk transfer
+            debt_note = ""
+            if getattr(data, "debt_action", "NONE") != "NONE" and getattr(data, "counterparty_name", None):
+                counterparty = await self.repo.find_user_by_name_or_username(data.counterparty_name)
 
-            # Format teks dompet
+                if counterparty:
+                    action = data.debt_action
+
+                    if action == "BORROW":
+                        await self.repo.create_debt(
+                            creditor_user_id=counterparty.id,
+                            debtor_user_id=user_id,
+                            amount=data.amount,
+                            description=data.description,
+                            notes=f"Auto from transaction {trx.id} (BORROW)"
+                        )
+                        debt_note = f"\n🤝 Hutang tercatat: Anda berhutang ke {counterparty.first_name}."
+
+                    elif action == "LEND":
+                        await self.repo.create_debt(
+                            creditor_user_id=user_id,
+                            debtor_user_id=counterparty.id,
+                            amount=data.amount,
+                            description=data.description,
+                            notes=f"Auto from transaction {trx.id} (LEND)"
+                        )
+                        debt_note = f"\n🤝 Piutang tercatat: {counterparty.first_name} berhutang ke Anda."
+
+                    elif action == "PAY":
+                        open_debt = None
+
+                        try:
+                            open_debt = await self.repo.get_latest_open_debt_between(
+                                creditor_user_id=counterparty.id,
+                                debtor_user_id=user_id
+                            )
+                        except Exception:
+                            open_debt = None
+
+                        if not open_debt:
+                            try:
+                                owed_list = await self.repo.get_debts_owed(user_id, status="pending")
+                                if owed_list:
+                                    open_debt = owed_list[0]
+                            except Exception:
+                                open_debt = None
+
+                        if open_debt:
+                            await self.repo.mark_debt_as_paid(
+                                debt_id=open_debt.id,
+                                transaction_id=trx.id
+                            )
+
+                            target_name = (
+                                open_debt.creditor.first_name
+                                if getattr(open_debt, "creditor", None) and getattr(open_debt.creditor, "first_name", None)
+                                else counterparty.first_name
+                            )
+                            debt_note = f"\n✅ Hutang ke {target_name} ditandai lunas."
+                        else:
+                            debt_note = "\nℹ️ Tidak ditemukan hutang pending yang cocok, hanya mencatat transaksi."
+
+            if data.transaction_type == "EXPENSE":
+                icon = "🔴"
+            elif data.transaction_type == "INCOME":
+                icon = "🟢"
+            else:
+                icon = "🔄"
+
             wallet_info = f"💳 {wallet.name}"
             if target_wallet:
                 wallet_info += f" ➡️ {target_wallet.name}"
@@ -110,6 +150,7 @@ class TransactionService:
                 f"💰 Rp {data.amount:,.0f}\n"
                 f"📂 {category.name if category else '-'}\n"
                 f"{wallet_info}"
+                f"{debt_note}"
             )
 
         except InsufficientBalanceError as e:
@@ -121,7 +162,6 @@ class TransactionService:
             return "Terjadi kesalahan sistem database."
 
     async def get_balance_summary(self, user_id: int) -> str:
-        """Mengambil rekap saldo semua wallet"""
         wallets = await self.repo.get_user_wallets(user_id)
 
         if not wallets:
@@ -131,7 +171,6 @@ class TransactionService:
         total_assets = 0
 
         for w in wallets:
-            # Hitung saldo real-time
             balance = await self.repo.get_wallet_balance(w.id, user_id)
             total_assets += balance
             report += f"💳 **{w.name}:** Rp {balance:,.0f}\n"
@@ -140,7 +179,6 @@ class TransactionService:
         return report
 
     async def get_last_transactions(self, user_id: int) -> str:
-        """Mengambil 5 transaksi terakhir"""
         trxs = await self.repo.get_recent_transactions(user_id, limit=5)
 
         if not trxs:
@@ -148,15 +186,12 @@ class TransactionService:
 
         report = "🕓 **5 Transaksi Terakhir:**\n\n"
         for t in trxs:
-            # Tentukan icon
             if t.type == 'expense': icon = "🔴"
             elif t.type == 'income': icon = "🟢"
             else: icon = "🔄"
 
-            # Format tanggal (DD/MM)
             date_str = t.trx_date.strftime("%d/%m")
 
-            # Format Deskripsi
             desc = t.description or "-"
             if len(desc) > 20: desc = desc[:17] + "..."
 

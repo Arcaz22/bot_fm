@@ -9,16 +9,32 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = Field(..., alias="DATABASE_URL")
 
+    AI_FREE_QUOTA: int
+    AI_WHITELIST_USER_IDS: str | None = None
+
     @property
     def database_url(self) -> str:
         url = self.DATABASE_URL
-
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-
         return url
+
+    @property
+    def ai_whitelist_ids(self) -> set[int]:
+        if not self.AI_WHITELIST_USER_IDS:
+            return set()
+        ids: set[int] = set()
+        for part in self.AI_WHITELIST_USER_IDS.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                ids.add(int(part))
+            except ValueError:
+                continue
+        return ids
 
     model_config = SettingsConfigDict(
         env_file=".env",

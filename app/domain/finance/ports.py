@@ -1,6 +1,6 @@
 from typing import Protocol, Optional, List
 from datetime import date
-from app.infrastructure.db.models import MstWallet, MstCategory, TrsTransaction, TrsDebt
+from app.infrastructure.db.models import MstWallet, MstCategory, TrsTransaction, TrsDebt, SysTelegramUser
 
 class FinanceRepoPort(Protocol):
     async def get_wallet_by_name(self, user_id: int, name: str) -> Optional[MstWallet]: ...
@@ -9,6 +9,8 @@ class FinanceRepoPort(Protocol):
 
     async def get_category_by_name(self, user_id: int, name: str, type: str) -> Optional[MstCategory]: ...
     async def create_category(self, user_id: int, name: str, type: str) -> MstCategory: ...
+
+    async def find_user_by_name_or_username(self, query: str) -> Optional[SysTelegramUser]: ...
 
     async def create_transaction(
         self,
@@ -21,7 +23,6 @@ class FinanceRepoPort(Protocol):
         trx_date: date = None
     ) -> TrsTransaction: ...
 
-    # Debt Management
     async def create_debt(
         self,
         creditor_user_id: int,
@@ -36,3 +37,9 @@ class FinanceRepoPort(Protocol):
     async def get_debt_by_id(self, debt_id: int) -> Optional[TrsDebt]: ...
     async def mark_debt_as_paid(self, debt_id: int, transaction_id: Optional[int] = None) -> TrsDebt: ...
     async def cancel_debt(self, debt_id: int) -> TrsDebt: ...
+
+    async def get_latest_open_debt_between(
+        self,
+        creditor_user_id: int,
+        debtor_user_id: int
+    ) -> Optional[TrsDebt]: ...

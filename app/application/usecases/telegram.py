@@ -4,6 +4,7 @@ from app.presentation.schemas.telegram import Update, Message
 from app.domain.telegram.entities import TelegramUser
 from app.domain.telegram.rules import ensure_active, reset_to_idle
 from app.domain.telegram.ports import TelegramUserRepo, TelegramNotifier
+from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ def _detect_intent(text: str) -> str:
         "ada hutang", "ada piutang", "berapa hutang", "berapa piutang", "sisa hutang", "sisa piutang"
     ]
     if any(keyword in text_lower for keyword in debt_keywords):
+        if "bayar" in text_lower or "lunasin" in text_lower:
+            return "transaction"
         return "debt"
 
     return "transaction"
@@ -45,6 +48,33 @@ class HandleTelegramUpdate:
         self.user_repo = user_repo
         self.notifier = notifier
         self.trans_service = trans_service
+
+    async def _check_ai_quota(self, user: TelegramUser) -> bool:
+        if user.id in settings.ai_whitelist_ids:
+            return True
+
+        temp = user.temp_data or {}
+        try:
+            used = int(temp.get("ai_usage", 0) or 0)
+        except (TypeError, ValueError):
+            used = 0
+
+        quota = settings.AI_FREE_QUOTA
+
+        if quota and quota > 0 and used >= quota:
+            await self.notifier.send_message(
+                user.id,
+                (
+                    "⚠️ Jatah penggunaan AI Anda sudah habis.\n\n"
+                    "Hubungi admin jika ingin menambah limit atau dimasukkan ke whitelist."
+                ),
+            )
+            return False
+
+        temp["ai_usage"] = used + 1
+        user.temp_data = temp
+        await self.user_repo.upsert(user)
+        return True
 
     async def execute(self, update: Update) -> None:
         logger.info(f"Update diterima: {update.model_dump()}")
@@ -125,7 +155,9 @@ class HandleTelegramUpdate:
                 return
 
             logger.info(f"Intent detected: TRANSACTION untuk user {chat_id}, processing via LLM")
-            response_text = await self.trans_service.process_natural_language(chat_id, text)
+            if not await self._check_ai_quota(user):
+                return
 
+            response_text = await self.trans_service.process_natural_language(chat_id, text)
             await self.notifier.send_message(chat_id, response_text)
             return
