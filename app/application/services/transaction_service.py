@@ -20,6 +20,10 @@ class TransactionService:
 
             data = ExtractedTransaction(**raw_data)
 
+            # Fallback wallet default jika tidak ada wallet_name
+            if not getattr(data, "wallet_name", None):
+                data.wallet_name = "BCA"
+
             try:
                 tl = text.lower()
                 if getattr(data, "debt_action", "NONE") == "NONE":

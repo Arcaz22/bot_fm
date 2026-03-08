@@ -1,14 +1,23 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 class Chat(BaseModel):
     id: int
     first_name: Optional[str] = None
 
+class PhotoSize(BaseModel):
+    file_id: str
+    file_unique_id: str
+    width: int
+    height: int
+    file_size: Optional[int] = None
+
 class Message(BaseModel):
     message_id: int
     chat: Chat
     text: Optional[str] = None
+    caption: Optional[str] = None
+    photo: Optional[List[PhotoSize]] = None
 
 class CallbackQuery(BaseModel):
     id: str

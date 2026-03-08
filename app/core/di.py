@@ -9,6 +9,16 @@ async def resolve_manage_debt_usecase():
         repo = FinanceRepo(session)
         debt_service = DebtService(repo=repo)
         return ManageDebt(debt_service=debt_service)
+
+async def resolve_process_receipt_usecase():
+    from app.application.services.receipt_service import ReceiptService
+    from app.application.usecases.receipt import ProcessReceiptImage
+    from app.infrastructure.llm.client import GeminiLLM
+    async with async_session() as session:
+        repo = FinanceRepo(session)
+        llm = GeminiLLM()
+        receipt_service = ReceiptService(llm=llm, repo=repo)
+        return ProcessReceiptImage(receipt_service=receipt_service)
 from functools import lru_cache
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession

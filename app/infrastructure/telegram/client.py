@@ -1,6 +1,7 @@
 import logging
 import httpx
 import time
+from typing import Optional
 from app.core.settings import settings
 
 class TelegramClient:
@@ -63,15 +64,44 @@ class TelegramClient:
 
         result = await self.post("/sendMessage", data)
 
-        if not result or not result.get("ok"):
-            self.logger.error(
-                f"[{msg_id}] Failed to send message:"
-                f" {result.get('error', 'Unknown error') if result else 'No response'}"
-            )
-            return False
-        else:
+        if result and result.get("ok"):
             self.logger.info(
                 f"[{msg_id}] Message delivered successfully:"
                 f" message_id={result.get('result', {}).get('message_id')}"
             )
             return True
+        else:
+            self.logger.error(
+                f"[{msg_id}] Failed to send message:"
+                f" {result.get('error', 'Unknown error') if result else 'No response'}"
+            )
+            return False
+
+    async def get_file(self, file_id: str) -> Optional[str]:
+        """Dapatkan file_path dari Telegram API berdasarkan file_id."""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.get(
+                    f"{self.base_url}/getFile",
+                    params={"file_id": file_id}
+                )
+                data = resp.json()
+                if data.get("ok"):
+                    return data["result"]["file_path"]
+                self.logger.error(f"getFile failed: {data}")
+        except Exception as e:
+            self.logger.error(f"get_file error: {e}")
+        return None
+
+    async def download_file(self, file_path: str) -> Optional[bytes]:
+        """Download file bytes dari Telegram."""
+        try:
+            file_url = f"https://api.telegram.org/file/bot{self.bot_token}/{file_path}"
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                resp = await client.get(file_url)
+                if resp.status_code == 200:
+                    return resp.content
+                self.logger.error(f"download_file HTTP {resp.status_code}")
+        except Exception as e:
+            self.logger.error(f"download_file error: {e}")
+        return None
