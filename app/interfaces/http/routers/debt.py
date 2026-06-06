@@ -35,31 +35,34 @@ class DebtPayResponse(BaseModel):
 
 @router.post("/create", response_model=DebtCreateResponse)
 async def create_debt(
-    creditor_user_id: int = Form(..., description="User ID yang bayar duluan (punya piutang)"),
-    debtor_user_id: int = Form(..., description="User ID yang ngutang (punya hutang)"),
+    owner_user_id: int = Form(..., description="User ID pemilik catatan hutang/piutang"),
+    counterparty_name: str = Form(..., description="Nama pihak lawan (kontak personal, tidak harus user bot)"),
+    direction: str = Form(..., description="I_OWE jika owner hutang, THEY_OWE jika pihak lawan hutang ke owner"),
     amount: float = Form(..., gt=0, description="Jumlah hutang"),
     description: str = Form(..., description="Deskripsi singkat (misal: 'Bayar makan bareng')"),
     notes: Optional[str] = Form(default=None, description="Catatan tambahan (optional)"),
     usecase: ManageDebt = Depends(get_manage_debt_usecase)
 ):
     """
-    Create hutang-piutang record
+    Create hutang-piutang personal.
 
     **Scenario:**
-    - User A bayar makan untuk User B → A = creditor, B = debtor
-    - User A upload receipt, sebagian untuk User B → A = creditor, B = debtor
+    - Saya hutang ke Z → direction = I_OWE
+    - Z hutang ke saya → direction = THEY_OWE
 
     **Example:**
     ```
-    creditor_user_id: 123456789 (User A - yang bayar)
-    debtor_user_id: 987654321 (User B - yang ngutang)
+    owner_user_id: 123456789
+    counterparty_name: "Z"
+    direction: "I_OWE"
     amount: 150000
     description: "Bayar makan di warung"
     ```
     """
     result = await usecase.create_debt(
-        creditor_user_id=creditor_user_id,
-        debtor_user_id=debtor_user_id,
+        owner_user_id=owner_user_id,
+        counterparty_name=counterparty_name,
+        direction=direction,
         amount=amount,
         description=description,
         notes=notes
@@ -101,6 +104,7 @@ async def get_debt_summary(
 async def pay_debt(
     debt_id: int = Form(..., description="ID hutang yang mau dilunasi"),
     user_id: int = Form(..., description="User ID yang melakukan action"),
+    paid_amount: Optional[float] = Form(default=None, gt=0, description="Nominal pembayaran. Kosongkan untuk lunas penuh"),
     transaction_id: Optional[int] = Form(default=None, description="Transaction ID jika ada pembayaran via transfer"),
     usecase: ManageDebt = Depends(get_manage_debt_usecase)
 ):
@@ -121,7 +125,8 @@ async def pay_debt(
     result = await usecase.pay_debt(
         debt_id=debt_id,
         user_id=user_id,
-        transaction_id=transaction_id
+        transaction_id=transaction_id,
+        paid_amount=paid_amount
     )
 
     return DebtPayResponse(

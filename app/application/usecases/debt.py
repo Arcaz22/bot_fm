@@ -21,26 +21,41 @@ class ManageDebt:
 
     async def create_debt(
         self,
-        creditor_user_id: int,
-        debtor_user_id: int,
+        owner_user_id: int,
+        counterparty_name: str,
+        direction: str,
         amount: float,
         description: str,
         notes: Optional[str] = None
     ) -> dict:
         """
-        UseCase: Create new debt record
+        UseCase: Create new personal debt record
 
         Validation:
         - Amount harus > 0
-        - Creditor != Debtor
+        - Counterparty wajib diisi
+        - Direction harus I_OWE atau THEY_OWE
         """
-        logger.info(f"UseCase: Create debt - {debtor_user_id} owes {creditor_user_id} {amount}")
+        direction = direction.strip().upper() if direction else ""
+        logger.info(f"UseCase: Create debt - owner {owner_user_id} {direction} {counterparty_name} {amount}")
 
         # Input validation
-        if creditor_user_id <= 0 or debtor_user_id <= 0:
+        if owner_user_id <= 0:
             return {
                 "success": False,
                 "error": "User ID tidak valid"
+            }
+
+        if not counterparty_name or not counterparty_name.strip():
+            return {
+                "success": False,
+                "error": "Nama pihak lawan wajib diisi"
+            }
+
+        if direction not in {"I_OWE", "THEY_OWE"}:
+            return {
+                "success": False,
+                "error": "Direction harus I_OWE atau THEY_OWE"
             }
 
         if amount <= 0:
@@ -58,17 +73,19 @@ class ManageDebt:
         # Call service
         try:
             result = await self.service.create_debt_record(
-                creditor_user_id=creditor_user_id,
-                debtor_user_id=debtor_user_id,
+                owner_user_id=owner_user_id,
+                counterparty_name=counterparty_name,
+                direction=direction,
                 amount=amount,
                 description=description,
                 notes=notes
             )
 
+            direction_text = "Anda berhutang ke" if direction == "I_OWE" else "Berhutang ke Anda"
             return {
                 "success": True,
                 "data": result,
-                "message": f"✅ Hutang berhasil dicatat! {amount:,.0f}"
+                "message": f"✅ Hutang berhasil dicatat! {direction_text}: {counterparty_name.strip()} - Rp {amount:,.0f}"
             }
         except ValueError as e:
             logger.error(f"Validation error in create_debt: {e}")
@@ -116,13 +133,14 @@ class ManageDebt:
         self,
         debt_id: int,
         user_id: int,
-        transaction_id: Optional[int] = None
+        transaction_id: Optional[int] = None,
+        paid_amount: Optional[float] = None
     ) -> dict:
         """
         UseCase: Mark debt as paid
 
         Validation:
-        - User harus creditor atau debtor dari debt ini
+        - User harus owner dari catatan debt ini
         - Debt harus status pending
         """
         logger.info(f"UseCase: Pay debt {debt_id} by user {user_id}")
@@ -133,17 +151,32 @@ class ManageDebt:
                 "error": "Debt ID tidak valid"
             }
 
+        if paid_amount is not None and paid_amount <= 0:
+            return {
+                "success": False,
+                "error": "Nominal pembayaran harus lebih dari 0"
+            }
+
         try:
             result = await self.service.mark_as_paid(
                 debt_id=debt_id,
                 user_id=user_id,
-                transaction_id=transaction_id
+                transaction_id=transaction_id,
+                paid_amount=paid_amount
             )
+
+            if result["status"] == "paid":
+                message = f"✅ Hutang berhasil dilunasi! Rp {result['paid_amount']:,.0f}"
+            else:
+                message = (
+                    f"✅ Pembayaran hutang dicatat: Rp {result['paid_amount']:,.0f}\n"
+                    f"💰 Sisa hutang: Rp {result['remaining_amount']:,.0f}"
+                )
 
             return {
                 "success": True,
                 "data": result,
-                "message": f"✅ Hutang berhasil dilunasi! Rp {result['amount']:,.0f}"
+                "message": message
             }
         except ValueError as e:
             logger.error(f"Validation error in pay_debt: {e}")

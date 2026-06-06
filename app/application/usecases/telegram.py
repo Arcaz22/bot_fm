@@ -56,9 +56,13 @@ def _detect_intent(text: str) -> str:
     if has_debt_keyword:
         has_action = bool(tokens & DEBT_ACTION_CTX)
         has_query = bool(tokens & DEBT_QUERY_CTX)
+        has_amount = bool(re.search(r'\b\d+(?:[.,]\d+)?\s*(?:rb|ribu|k|jt|juta)?\b', text_lower))
 
         if has_action:
             logger.debug(f"Intent TRANSACTION detected: debt payment action '{text}'")
+            return "transaction"
+        elif has_amount and not has_query:
+            logger.debug(f"Intent TRANSACTION detected: debt record with amount '{text}'")
             return "transaction"
         elif has_query or len(tokens) <= 4:
             logger.debug(f"Intent DEBT detected by query context: '{text}'")

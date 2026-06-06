@@ -26,15 +26,12 @@ class SysTelegramUser(Base):
     categories: Mapped[List["MstCategory"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     transactions: Mapped[List["TrsTransaction"]] = relationship(back_populates="owner")
 
-    # Hutang-piutang relationships
-    debts_owed: Mapped[List["TrsDebt"]] = relationship(
-        back_populates="debtor",
-        foreign_keys="[TrsDebt.debtor_user_id]"
+    counterparties: Mapped[List["MstCounterparty"]] = relationship(
+        back_populates="owner",
+        cascade="all, delete-orphan",
+        foreign_keys="[MstCounterparty.owner_telegram_user_id]"
     )
-    debts_to_collect: Mapped[List["TrsDebt"]] = relationship(
-        back_populates="creditor",
-        foreign_keys="[TrsDebt.creditor_user_id]"
-    )
+    debts: Mapped[List["TrsDebt"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.id} - {self.first_name}>"
@@ -81,6 +78,35 @@ class MstCategory(Base):
     owner: Mapped["SysTelegramUser"] = relationship(back_populates="categories")
 
 
+class MstCounterparty(Base):
+    __tablename__ = "mst_counterparty"
+    __table_args__ = (
+        UniqueConstraint("owner_telegram_user_id", "display_name", name="uq_counterparty_owner_name"),
+        Index("idx_counterparty_owner_name", "owner_telegram_user_id", "display_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    owner_telegram_user_id: Mapped[int] = mapped_column(ForeignKey("sys_telegram_user.id"), index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+
+    # Optional link jika suatu saat counterparty melakukan verifikasi eksplisit.
+    linked_telegram_user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("sys_telegram_user.id"),
+        nullable=True,
+        index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    owner: Mapped["SysTelegramUser"] = relationship(
+        back_populates="counterparties",
+        foreign_keys=[owner_telegram_user_id]
+    )
+    linked_user: Mapped[Optional["SysTelegramUser"]] = relationship(foreign_keys=[linked_telegram_user_id])
+    debts: Mapped[List["TrsDebt"]] = relationship(back_populates="counterparty")
+
+
 class TrsTransaction(Base):
     __tablename__ = "trs_transaction"
     __table_args__ = (
@@ -111,42 +137,42 @@ class TrsTransaction(Base):
 
 class TrsDebt(Base):
     """
-    Model untuk tracking hutang-piutang
+    Model tracking hutang-piutang personal.
 
-    Scenarios:
-    1. User A bayar dulu untuk User B → User B ngutang ke User A
-       - creditor_user_id = A (yang bayar/kasih pinjaman)
-       - debtor_user_id = B (yang hutang)
+    Debt selalu milik satu owner Telegram user. Counterparty adalah kontak/nama
+    personal owner, bukan user bot yang wajib ada.
 
-    2. User A upload nota, tapi sebagian item untuk User B
-       - A create debt: B harus bayar ke A
+    direction:
+    - I_OWE: owner punya hutang ke counterparty
+    - THEY_OWE: counterparty punya hutang ke owner
     """
     __tablename__ = "trs_debt"
     __table_args__ = (
         CheckConstraint("status IN ('pending','paid','cancelled')", name="ck_debt_status"),
+        CheckConstraint("direction IN ('I_OWE','THEY_OWE')", name="ck_debt_direction"),
         CheckConstraint("amount > 0", name="ck_debt_amount_positive"),
-        Index("idx_debt_debtor_status", "debtor_user_id", "status"),
-        Index("idx_debt_creditor_status", "creditor_user_id", "status"),
+        Index("idx_debt_owner_status", "owner_telegram_user_id", "status"),
+        Index("idx_debt_owner_direction_status", "owner_telegram_user_id", "direction", "status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
-    # Creditor = Yang ngasih pinjaman / bayar duluan
-    creditor_user_id: Mapped[int] = mapped_column(
-        BigInteger,
+    owner_telegram_user_id: Mapped[int] = mapped_column(
         ForeignKey("sys_telegram_user.id"),
         index=True,
-        comment="User yang bayar duluan (punya piutang)"
+        comment="User pemilik catatan debt"
     )
 
-    # Debtor = Yang ngutang / harus bayar
-    debtor_user_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("sys_telegram_user.id"),
+    counterparty_id: Mapped[int] = mapped_column(
+        ForeignKey("mst_counterparty.id"),
         index=True,
-        comment="User yang ngutang (punya hutang)"
+        comment="Kontak/nama pihak lawan milik owner"
     )
 
+    direction: Mapped[str] = mapped_column(
+        String(20),
+        comment="I_OWE | THEY_OWE"
+    )
     amount: Mapped[Numeric] = mapped_column(Numeric(18, 2), nullable=False)
     description: Mapped[str] = mapped_column(String(255))
 
@@ -168,17 +194,9 @@ class TrsDebt(Base):
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Relationships
-    creditor: Mapped["SysTelegramUser"] = relationship(
-        back_populates="debts_to_collect",
-        foreign_keys=[creditor_user_id]
-    )
-    debtor: Mapped["SysTelegramUser"] = relationship(
-        back_populates="debts_owed",
-        foreign_keys=[debtor_user_id]
-    )
+    owner: Mapped["SysTelegramUser"] = relationship(back_populates="debts")
+    counterparty: Mapped["MstCounterparty"] = relationship(back_populates="debts")
     related_transaction: Mapped[Optional["TrsTransaction"]] = relationship(foreign_keys=[related_transaction_id])
 
     def __repr__(self):
-        return f"<Debt {self.id}: {self.debtor_user_id} owes {self.creditor_user_id} {self.amount} ({self.status})>"
-
+        return f"<Debt {self.id}: owner={self.owner_telegram_user_id} {self.direction} {self.counterparty_id} {self.amount} ({self.status})>"

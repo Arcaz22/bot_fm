@@ -1,8 +1,8 @@
-"""Initial tables
+"""new tabel
 
-Revision ID: 2ed1bfb43f61
+Revision ID: 6e1bcafe433e
 Revises: 
-Create Date: 2026-01-19 12:26:09.920169
+Create Date: 2026-06-06 18:01:39.947522
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '2ed1bfb43f61'
+revision: str = '6e1bcafe433e'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -38,12 +38,26 @@ def upgrade() -> None:
     sa.Column('type', sa.String(length=10), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-    sa.CheckConstraint("type IN ('income','expense')", name='ck_category_type'),
+    sa.CheckConstraint("type IN ('income','expense','transfer')", name='ck_category_type'),
     sa.ForeignKeyConstraint(['owner_telegram_user_id'], ['sys_telegram_user.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('owner_telegram_user_id', 'name', 'type', name='uq_cat_user_name_type')
     )
     op.create_index(op.f('ix_mst_category_owner_telegram_user_id'), 'mst_category', ['owner_telegram_user_id'], unique=False)
+    op.create_table('mst_counterparty',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('owner_telegram_user_id', sa.BigInteger(), nullable=False),
+    sa.Column('display_name', sa.String(length=100), nullable=False),
+    sa.Column('linked_telegram_user_id', sa.BigInteger(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['linked_telegram_user_id'], ['sys_telegram_user.id'], ),
+    sa.ForeignKeyConstraint(['owner_telegram_user_id'], ['sys_telegram_user.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('owner_telegram_user_id', 'display_name', name='uq_counterparty_owner_name')
+    )
+    op.create_index('idx_counterparty_owner_name', 'mst_counterparty', ['owner_telegram_user_id', 'display_name'], unique=False)
+    op.create_index(op.f('ix_mst_counterparty_linked_telegram_user_id'), 'mst_counterparty', ['linked_telegram_user_id'], unique=False)
+    op.create_index(op.f('ix_mst_counterparty_owner_telegram_user_id'), 'mst_counterparty', ['owner_telegram_user_id'], unique=False)
     op.create_table('mst_wallet',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('owner_telegram_user_id', sa.BigInteger(), nullable=False),
@@ -67,7 +81,6 @@ def upgrade() -> None:
     sa.Column('type', sa.String(length=10), nullable=False),
     sa.Column('amount', sa.Numeric(precision=18, scale=2), nullable=False),
     sa.Column('description', sa.String(length=255), nullable=True),
-    sa.Column('embedding_data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("type IN ('income','expense','transfer')", name='ck_trx_type'),
     sa.ForeignKeyConstraint(['category_id'], ['mst_category.id'], ),
@@ -78,17 +91,50 @@ def upgrade() -> None:
     )
     op.create_index('idx_trx_owner_date', 'trs_transaction', ['owner_telegram_user_id', 'trx_date'], unique=False)
     op.create_index(op.f('ix_trs_transaction_owner_telegram_user_id'), 'trs_transaction', ['owner_telegram_user_id'], unique=False)
+    op.create_table('trs_debt',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('owner_telegram_user_id', sa.BigInteger(), nullable=False, comment='User pemilik catatan debt'),
+    sa.Column('counterparty_id', sa.Integer(), nullable=False, comment='Kontak/nama pihak lawan milik owner'),
+    sa.Column('direction', sa.String(length=20), nullable=False, comment='I_OWE | THEY_OWE'),
+    sa.Column('amount', sa.Numeric(precision=18, scale=2), nullable=False),
+    sa.Column('description', sa.String(length=255), nullable=False),
+    sa.Column('status', sa.String(length=20), nullable=False, comment='pending | paid | cancelled'),
+    sa.Column('related_transaction_id', sa.Integer(), nullable=True, comment='Transaction ID jika ada pembayaran via transfer'),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('paid_at', sa.DateTime(), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.CheckConstraint("direction IN ('I_OWE','THEY_OWE')", name='ck_debt_direction'),
+    sa.CheckConstraint("status IN ('pending','paid','cancelled')", name='ck_debt_status'),
+    sa.CheckConstraint('amount > 0', name='ck_debt_amount_positive'),
+    sa.ForeignKeyConstraint(['counterparty_id'], ['mst_counterparty.id'], ),
+    sa.ForeignKeyConstraint(['owner_telegram_user_id'], ['sys_telegram_user.id'], ),
+    sa.ForeignKeyConstraint(['related_transaction_id'], ['trs_transaction.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('idx_debt_owner_direction_status', 'trs_debt', ['owner_telegram_user_id', 'direction', 'status'], unique=False)
+    op.create_index('idx_debt_owner_status', 'trs_debt', ['owner_telegram_user_id', 'status'], unique=False)
+    op.create_index(op.f('ix_trs_debt_counterparty_id'), 'trs_debt', ['counterparty_id'], unique=False)
+    op.create_index(op.f('ix_trs_debt_owner_telegram_user_id'), 'trs_debt', ['owner_telegram_user_id'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index(op.f('ix_trs_debt_owner_telegram_user_id'), table_name='trs_debt')
+    op.drop_index(op.f('ix_trs_debt_counterparty_id'), table_name='trs_debt')
+    op.drop_index('idx_debt_owner_status', table_name='trs_debt')
+    op.drop_index('idx_debt_owner_direction_status', table_name='trs_debt')
+    op.drop_table('trs_debt')
     op.drop_index(op.f('ix_trs_transaction_owner_telegram_user_id'), table_name='trs_transaction')
     op.drop_index('idx_trx_owner_date', table_name='trs_transaction')
     op.drop_table('trs_transaction')
     op.drop_index(op.f('ix_mst_wallet_owner_telegram_user_id'), table_name='mst_wallet')
     op.drop_table('mst_wallet')
+    op.drop_index(op.f('ix_mst_counterparty_owner_telegram_user_id'), table_name='mst_counterparty')
+    op.drop_index(op.f('ix_mst_counterparty_linked_telegram_user_id'), table_name='mst_counterparty')
+    op.drop_index('idx_counterparty_owner_name', table_name='mst_counterparty')
+    op.drop_table('mst_counterparty')
     op.drop_index(op.f('ix_mst_category_owner_telegram_user_id'), table_name='mst_category')
     op.drop_table('mst_category')
     op.drop_table('sys_telegram_user')

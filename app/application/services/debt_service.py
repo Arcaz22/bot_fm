@@ -1,9 +1,7 @@
 import logging
-from typing import List, Optional
+from typing import Optional
 
 from app.domain.finance.ports import FinanceRepoPort
-from app.infrastructure.db.models import TrsDebt
-
 logger = logging.getLogger(__name__)
 
 
@@ -13,18 +11,20 @@ class DebtService:
 
     async def create_debt_record(
         self,
-        creditor_user_id: int,
-        debtor_user_id: int,
+        owner_user_id: int,
+        counterparty_name: str,
+        direction: str,
         amount: float,
         description: str,
         notes: Optional[str] = None
     ) -> dict:
         """
-        Create hutang-piutang record
+        Create personal hutang-piutang record.
 
         Args:
-            creditor_user_id: User yang bayar duluan (punya piutang)
-            debtor_user_id: User yang ngutang (punya hutang)
+            owner_user_id: User pemilik catatan
+            counterparty_name: Nama pihak lawan, disimpan sebagai kontak personal
+            direction: I_OWE jika owner hutang, THEY_OWE jika pihak lawan hutang ke owner
             amount: Jumlah hutang
             description: Deskripsi singkat
             notes: Catatan tambahan (optional)
@@ -33,27 +33,38 @@ class DebtService:
             Dict dengan debt info
         """
         # Validasi
-        if creditor_user_id == debtor_user_id:
-            raise ValueError("Tidak bisa create hutang ke diri sendiri")
+        direction = direction.strip().upper() if direction else ""
+
+        if owner_user_id <= 0:
+            raise ValueError("User ID tidak valid")
+
+        if not counterparty_name or not counterparty_name.strip():
+            raise ValueError("Nama pihak lawan wajib diisi")
+
+        if direction not in {"I_OWE", "THEY_OWE"}:
+            raise ValueError("Direction harus I_OWE atau THEY_OWE")
 
         if amount <= 0:
             raise ValueError("Amount harus lebih dari 0")
 
         # Create debt
         debt = await self.repo.create_debt(
-            creditor_user_id=creditor_user_id,
-            debtor_user_id=debtor_user_id,
+            owner_user_id=owner_user_id,
+            counterparty_name=counterparty_name,
+            direction=direction,
             amount=amount,
             description=description,
             notes=notes
         )
 
-        logger.info(f"Debt created: {debt.id} - {debtor_user_id} owes {creditor_user_id} {amount}")
+        logger.info(f"Debt created: {debt.id} - owner {owner_user_id} {direction} {counterparty_name} {amount}")
 
         return {
             "debt_id": debt.id,
-            "creditor_user_id": debt.creditor_user_id,
-            "debtor_user_id": debt.debtor_user_id,
+            "owner_user_id": debt.owner_telegram_user_id,
+            "counterparty_id": debt.counterparty_id,
+            "counterparty_name": counterparty_name.strip(),
+            "direction": debt.direction,
             "amount": float(debt.amount),
             "description": debt.description,
             "status": debt.status,
@@ -72,8 +83,8 @@ class DebtService:
         for debt in debts:
             debt_list.append({
                 "debt_id": debt.id,
-                "creditor_name": debt.creditor.first_name if debt.creditor else "Unknown",
-                "creditor_id": debt.creditor_user_id,
+                "counterparty_name": debt.counterparty.display_name if debt.counterparty else "Unknown",
+                "counterparty_id": debt.counterparty_id,
                 "amount": float(debt.amount),
                 "description": debt.description,
                 "created_at": debt.created_at.isoformat(),
@@ -98,8 +109,8 @@ class DebtService:
         for debt in debts:
             receivable_list.append({
                 "debt_id": debt.id,
-                "debtor_name": debt.debtor.first_name if debt.debtor else "Unknown",
-                "debtor_id": debt.debtor_user_id,
+                "counterparty_name": debt.counterparty.display_name if debt.counterparty else "Unknown",
+                "counterparty_id": debt.counterparty_id,
                 "amount": float(debt.amount),
                 "description": debt.description,
                 "created_at": debt.created_at.isoformat(),
@@ -116,15 +127,18 @@ class DebtService:
         self,
         debt_id: int,
         user_id: int,
-        transaction_id: Optional[int] = None
+        transaction_id: Optional[int] = None,
+        paid_amount: Optional[float] = None
     ) -> dict:
         """
-        Mark debt sebagai lunas
+        Mark debt sebagai lunas atau bayar sebagian.
 
         Args:
             debt_id: ID hutang
-            user_id: User yang melakukan action (untuk validasi)
+            user_id: Owner catatan debt
             transaction_id: Optional link ke transaction pembayaran
+            paid_amount: Optional nominal pembayaran. Jika lebih kecil dari debt,
+                sisa debt tetap pending.
         """
         # Get debt untuk validasi
         debt = await self.repo.get_debt_by_id(debt_id)
@@ -132,19 +146,21 @@ class DebtService:
         if not debt:
             raise ValueError(f"Debt {debt_id} tidak ditemukan")
 
-        # Validasi: hanya creditor atau debtor yang bisa mark as paid
-        if user_id not in [debt.creditor_user_id, debt.debtor_user_id]:
+        # Debt adalah ledger personal. Hanya owner catatan yang bisa mengubah status.
+        if user_id != debt.owner_telegram_user_id:
             raise ValueError("Anda tidak punya akses untuk debt ini")
 
-        # Mark as paid
-        updated_debt = await self.repo.mark_debt_as_paid(debt_id, transaction_id)
+        original_amount = float(debt.amount)
+        updated_debt = await self.repo.mark_debt_as_paid(debt_id, transaction_id, paid_amount)
 
-        logger.info(f"Debt {debt_id} marked as paid by user {user_id}")
+        logger.info(f"Debt {debt_id} paid by user {user_id}")
 
         return {
             "debt_id": updated_debt.id,
             "status": updated_debt.status,
             "paid_at": updated_debt.paid_at.isoformat() if updated_debt.paid_at else None,
+            "paid_amount": float(paid_amount if paid_amount is not None else original_amount),
+            "remaining_amount": 0 if updated_debt.status == "paid" else float(updated_debt.amount),
             "amount": float(updated_debt.amount)
         }
 
@@ -162,7 +178,7 @@ class DebtService:
         output += f"🔴 **Hutang Saya**: Rp {debts_data['total_debt']:,.0f}\n"
         if debts_data['debts']:
             for debt in debts_data['debts'][:5]:  # Max 5
-                output += f"  • {debt['creditor_name']}: Rp {debt['amount']:,.0f}\n"
+                output += f"  • {debt['counterparty_name']}: Rp {debt['amount']:,.0f}\n"
                 output += f"    {debt['description']}\n"
             if debts_data['count'] > 5:
                 output += f"  ... dan {debts_data['count'] - 5} hutang lainnya\n"
@@ -175,7 +191,7 @@ class DebtService:
         output += f"🟢 **Piutang Saya**: Rp {receivables_data['total_receivable']:,.0f}\n"
         if receivables_data['receivables']:
             for rec in receivables_data['receivables'][:5]:  # Max 5
-                output += f"  • {rec['debtor_name']}: Rp {rec['amount']:,.0f}\n"
+                output += f"  • {rec['counterparty_name']}: Rp {rec['amount']:,.0f}\n"
                 output += f"    {rec['description']}\n"
             if receivables_data['count'] > 5:
                 output += f"  ... dan {receivables_data['count'] - 5} piutang lainnya\n"

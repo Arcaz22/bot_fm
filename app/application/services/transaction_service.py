@@ -1,4 +1,5 @@
 import logging
+import re
 from app.domain.llm.ports import LLMPort
 from app.domain.finance.ports import FinanceRepoPort
 from app.domain.finance import rules
@@ -7,6 +8,44 @@ from app.application.dtos.extraction import ExtractedTransaction
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_debt_hint(text: str) -> tuple[str | None, str | None]:
+    text_lower = text.lower().strip()
+
+    patterns = [
+        ("PAY", r'\b(?:bayar|lunasin|lunas(?:kan)?)\s+(?:hutang|utang)\s+(?:ke|sama|kepada)\s+(.+?)(?:\s+\d|$)'),
+        ("LEND", r'^(.+?)\s+(?:hutang|utang|berhutang|berutang)\s+(?:ke|sama|kepada)\s+(?:saya|aku|gue|gw)\b'),
+        ("BORROW", r'\b(?:hutang|utang|berhutang|berutang)\s+(?:ke|sama|kepada)\s+(.+?)(?:\s+\d|$)'),
+        ("BORROW", r'\b(?:pinjam|minjem)\s+(?:dari|ke|sama)\s+(.+?)(?:\s+\d|$)'),
+        ("LEND", r'\b(?:piutang|pinjemin|pinjamin)\s+(?:ke|sama|kepada)?\s*(.+?)(?:\s+\d|$)'),
+    ]
+
+    for action, pattern in patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            name = re.sub(r'\b(?:rp|idr)\b', '', match.group(1), flags=re.IGNORECASE).strip(" ,.-")
+            if name:
+                return action, name.title()
+
+    return None, None
+
+
+def _extract_amount(text: str) -> float | None:
+    match = re.search(r'\b(\d+(?:[.,]\d+)?)\s*(rb|ribu|k|jt|juta)?\b', text.lower())
+    if not match:
+        return None
+
+    raw_amount, suffix = match.groups()
+    amount = float(raw_amount.replace(",", "."))
+
+    if suffix in {"rb", "ribu", "k"}:
+        amount *= 1000
+    elif suffix in {"jt", "juta"}:
+        amount *= 1000000
+
+    return amount
+
+
 class TransactionService:
     def __init__(self, llm: LLMPort, repo: FinanceRepoPort):
         self.llm = llm
@@ -14,11 +53,25 @@ class TransactionService:
 
     async def process_natural_language(self, user_id: int, text: str) -> str:
         try:
-            raw_data = await self.llm.parse_transaction(text)
-            if "error" in raw_data:
-                return "🤖 Maaf, saya gagal paham. Coba kalimat simpel: 'Makan 20rb pake OVO' atau 'Transfer 50rb dari BCA ke Gopay'"
+            debt_action, counterparty_name = _extract_debt_hint(text)
+            amount_hint = _extract_amount(text)
 
-            data = ExtractedTransaction(**raw_data)
+            if debt_action and counterparty_name and amount_hint:
+                data = ExtractedTransaction(
+                    amount=amount_hint,
+                    category="Loan",
+                    wallet_name="BCA",
+                    description=text[:50],
+                    transaction_type="EXPENSE" if debt_action in {"LEND", "PAY"} else "INCOME",
+                    debt_action=debt_action,
+                    counterparty_name=counterparty_name
+                )
+            else:
+                raw_data = await self.llm.parse_transaction(text)
+                if "error" in raw_data:
+                    return "🤖 Maaf, saya gagal paham. Coba kalimat simpel: 'Makan 20rb pake OVO' atau 'Transfer 50rb dari BCA ke Gopay'"
+
+                data = ExtractedTransaction(**raw_data)
 
             # Fallback wallet default jika tidak ada wallet_name
             if not getattr(data, "wallet_name", None):
@@ -29,6 +82,14 @@ class TransactionService:
                 if getattr(data, "debt_action", "NONE") == "NONE":
                     if "bayar hutang" in tl or "lunasin hutang" in tl:
                         data.debt_action = "PAY"
+
+                debt_action, counterparty_name = _extract_debt_hint(text)
+                if debt_action and data.debt_action == "NONE":
+                    data.debt_action = debt_action
+                if counterparty_name and not data.counterparty_name:
+                    data.counterparty_name = counterparty_name
+                if data.debt_action == "PAY":
+                    data.transaction_type = "EXPENSE"
             except Exception:
                 pass
 
@@ -38,6 +99,35 @@ class TransactionService:
 
         try:
             rules.validate_transaction_amount(data.amount)
+
+            if data.debt_action in {"BORROW", "LEND"} and data.counterparty_name:
+                counterparty_name = data.counterparty_name.strip()
+                if not counterparty_name:
+                    return "Nama pihak lawan hutang wajib diisi."
+
+                direction = "I_OWE" if data.debt_action == "BORROW" else "THEY_OWE"
+                await self.repo.create_debt(
+                    owner_user_id=user_id,
+                    counterparty_name=counterparty_name,
+                    direction=direction,
+                    amount=data.amount,
+                    description=data.description,
+                    notes=f"Auto from debt note ({data.debt_action})"
+                )
+
+                if data.debt_action == "BORROW":
+                    return (
+                        f"🤝 **Hutang Tercatat!**\n\n"
+                        f"Anda berhutang ke {counterparty_name}\n"
+                        f"💰 Rp {data.amount:,.0f}\n\n"
+                    )
+
+                return (
+                    f"🤝 **Piutang Tercatat!**\n\n"
+                    f"{counterparty_name} berhutang ke Anda\n"
+                    f"💰 Rp {data.amount:,.0f}\n\n"
+                    "Saldo tidak berubah karena ini hanya catatan piutang."
+                )
 
             clean_wallet_name = rules.normalize_wallet_name(data.wallet_name)
             wallet = await self.repo.get_wallet_by_name(user_id, clean_wallet_name)
@@ -78,38 +168,41 @@ class TransactionService:
 
             debt_note = ""
             if getattr(data, "debt_action", "NONE") != "NONE" and getattr(data, "counterparty_name", None):
-                counterparty = await self.repo.find_user_by_name_or_username(data.counterparty_name)
+                counterparty_name = data.counterparty_name.strip()
 
-                if counterparty:
+                if counterparty_name:
                     action = data.debt_action
 
                     if action == "BORROW":
                         await self.repo.create_debt(
-                            creditor_user_id=counterparty.id,
-                            debtor_user_id=user_id,
+                            owner_user_id=user_id,
+                            counterparty_name=counterparty_name,
+                            direction="I_OWE",
                             amount=data.amount,
                             description=data.description,
                             notes=f"Auto from transaction {trx.id} (BORROW)"
                         )
-                        debt_note = f"\n🤝 Hutang tercatat: Anda berhutang ke {counterparty.first_name}."
+                        debt_note = f"\n🤝 Hutang tercatat: Anda berhutang ke {counterparty_name}."
 
                     elif action == "LEND":
                         await self.repo.create_debt(
-                            creditor_user_id=user_id,
-                            debtor_user_id=counterparty.id,
+                            owner_user_id=user_id,
+                            counterparty_name=counterparty_name,
+                            direction="THEY_OWE",
                             amount=data.amount,
                             description=data.description,
                             notes=f"Auto from transaction {trx.id} (LEND)"
                         )
-                        debt_note = f"\n🤝 Piutang tercatat: {counterparty.first_name} berhutang ke Anda."
+                        debt_note = f"\n🤝 Piutang tercatat: {counterparty_name} berhutang ke Anda."
 
                     elif action == "PAY":
                         open_debt = None
 
                         try:
-                            open_debt = await self.repo.get_latest_open_debt_between(
-                                creditor_user_id=counterparty.id,
-                                debtor_user_id=user_id
+                            open_debt = await self.repo.get_latest_open_debt_with_counterparty(
+                                owner_user_id=user_id,
+                                counterparty_name=counterparty_name,
+                                direction="I_OWE"
                             )
                         except Exception:
                             open_debt = None
@@ -123,17 +216,27 @@ class TransactionService:
                                 open_debt = None
 
                         if open_debt:
-                            await self.repo.mark_debt_as_paid(
+                            original_debt_amount = float(open_debt.amount)
+                            updated_debt = await self.repo.mark_debt_as_paid(
                                 debt_id=open_debt.id,
-                                transaction_id=trx.id
+                                transaction_id=trx.id,
+                                paid_amount=data.amount
                             )
 
                             target_name = (
-                                open_debt.creditor.first_name
-                                if getattr(open_debt, "creditor", None) and getattr(open_debt.creditor, "first_name", None)
-                                else counterparty.first_name
+                                open_debt.counterparty.display_name
+                                if getattr(open_debt, "counterparty", None) and getattr(open_debt.counterparty, "display_name", None)
+                                else counterparty_name
                             )
-                            debt_note = f"\n✅ Hutang ke {target_name} ditandai lunas."
+                            if updated_debt.status == "paid":
+                                debt_note = f"\n✅ Hutang ke {target_name} ditandai lunas."
+                            else:
+                                debt_note = (
+                                    f"\n✅ Pembayaran hutang ke {target_name} dicatat."
+                                    f"\n💰 Sisa hutang: Rp {float(updated_debt.amount):,.0f}"
+                                )
+                                if data.amount > original_debt_amount:
+                                    debt_note += f"\nℹ️ Pembayaran melebihi sisa hutang Rp {original_debt_amount:,.0f}."
                         else:
                             debt_note = "\nℹ️ Tidak ditemukan hutang pending yang cocok, hanya mencatat transaksi."
 

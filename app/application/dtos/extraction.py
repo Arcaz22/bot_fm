@@ -15,7 +15,6 @@ class ExtractedTransaction(BaseModel):
 
 
 class ReceiptItem(BaseModel):
-    """Item tunggal dari nota"""
     name: str
     quantity: int = 1
     price: float
@@ -23,7 +22,6 @@ class ReceiptItem(BaseModel):
 
 
 class ExtractedReceipt(BaseModel):
-    """Hasil ekstraksi dari foto nota"""
     store_name: Optional[str] = None
     items: List[ReceiptItem] = []
     subtotal: Optional[float] = None
@@ -33,7 +31,6 @@ class ExtractedReceipt(BaseModel):
 
 
 class ReceiptContext(BaseModel):
-    """Context yang diberikan user sebelum upload foto"""
     wallet_name: str = "BCA"
     default_category: Optional[str] = None
     notes: Optional[str] = None

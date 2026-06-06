@@ -1,6 +1,6 @@
 from typing import Protocol, Optional, List
 from datetime import date
-from app.infrastructure.db.models import MstWallet, MstCategory, TrsTransaction, TrsDebt, SysTelegramUser
+from app.infrastructure.db.models import MstWallet, MstCategory, MstCounterparty, TrsTransaction, TrsDebt, SysTelegramUser
 
 class FinanceRepoPort(Protocol):
     async def get_wallet_by_name(self, user_id: int, name: str) -> Optional[MstWallet]: ...
@@ -11,6 +11,8 @@ class FinanceRepoPort(Protocol):
     async def create_category(self, user_id: int, name: str, type: str) -> MstCategory: ...
 
     async def find_user_by_name_or_username(self, query: str) -> Optional[SysTelegramUser]: ...
+    async def get_counterparty_by_name(self, user_id: int, name: str) -> Optional[MstCounterparty]: ...
+    async def get_or_create_counterparty(self, user_id: int, name: str) -> MstCounterparty: ...
 
     async def create_transaction(
         self,
@@ -25,8 +27,9 @@ class FinanceRepoPort(Protocol):
 
     async def create_debt(
         self,
-        creditor_user_id: int,
-        debtor_user_id: int,
+        owner_user_id: int,
+        counterparty_name: str,
+        direction: str,
         amount: float,
         description: str,
         notes: Optional[str] = None
@@ -35,11 +38,17 @@ class FinanceRepoPort(Protocol):
     async def get_debts_owed(self, user_id: int, status: str = "pending") -> List[TrsDebt]: ...
     async def get_debts_to_collect(self, user_id: int, status: str = "pending") -> List[TrsDebt]: ...
     async def get_debt_by_id(self, debt_id: int) -> Optional[TrsDebt]: ...
-    async def mark_debt_as_paid(self, debt_id: int, transaction_id: Optional[int] = None) -> TrsDebt: ...
+    async def mark_debt_as_paid(
+        self,
+        debt_id: int,
+        transaction_id: Optional[int] = None,
+        paid_amount: Optional[float] = None
+    ) -> TrsDebt: ...
     async def cancel_debt(self, debt_id: int) -> TrsDebt: ...
 
-    async def get_latest_open_debt_between(
+    async def get_latest_open_debt_with_counterparty(
         self,
-        creditor_user_id: int,
-        debtor_user_id: int
+        owner_user_id: int,
+        counterparty_name: str,
+        direction: str = "I_OWE"
     ) -> Optional[TrsDebt]: ...
