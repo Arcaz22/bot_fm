@@ -13,6 +13,13 @@ from app.core.di import resolve_manage_debt_usecase, resolve_process_receipt_use
 logger = logging.getLogger(__name__)
 
 
+def _normalize_phone(phone_number: str) -> str:
+    digits = re.sub(r"\D", "", phone_number or "")
+    if digits.startswith("0"):
+        return f"62{digits[1:]}"
+    return digits
+
+
 def _detect_intent(text: str) -> str:
     """
     Hybrid Intent Detection dengan prioritas eksplisit:
@@ -92,6 +99,35 @@ def _detect_intent(text: str) -> str:
     return "transaction"
 
 
+def _get_features_message() -> str:
+    return (
+        "📌 **Fitur Bot Keuangan**\n\n"
+        "**Perintah cepat:**\n"
+        "• `/start` - mulai pakai bot dan daftar user Telegram.\n"
+        "• `/saldo` - lihat saldo semua wallet dan total aset.\n"
+        "• `/riwayat` atau `/history` - lihat 5 transaksi terakhir.\n"
+        "• `/phone` - simpan nomor Telegram untuk login dashboard.\n"
+        "• `/fitur` atau `/help` - lihat panduan ini.\n\n"
+        "**NLP / chat biasa:**\n"
+        "Ketik transaksi seperti ngobrol, tanpa command.\n"
+        "Contoh:\n"
+        "• `makan siang 25rb pake OVO`\n"
+        "• `gajian 5 juta masuk BCA`\n"
+        "• `transfer 100rb dari BCA ke Gopay`\n\n"
+        "**Saldo dan riwayat via NLP:**\n"
+        "• `saldo saya berapa?`\n"
+        "• `lihat transaksi terakhir`\n\n"
+        "**Hutang / piutang via NLP:**\n"
+        "• `hutang ke Budi 50rb`\n"
+        "• `Sari hutang ke saya 75rb`\n"
+        "• `bayar hutang ke Budi 25rb`\n"
+        "• `cek hutang` atau `lihat piutang`\n\n"
+        "**AI Vision / foto struk:**\n"
+        "Kirim foto struk atau nota belanja. Bot akan membaca item dan menyimpannya sebagai transaksi expense.\n"
+        "Tambahkan caption jika perlu catatan tambahan."
+    )
+
+
 class HandleTelegramUpdate:
     def __init__(
         self,
@@ -161,6 +197,39 @@ class HandleTelegramUpdate:
         msg_response = result.get("message") or result.get("error", "❌ Gagal memproses struk.")
         await self.notifier.send_message(chat_id, msg_response)
 
+    async def _send_phone_prompt(self, chat_id: int) -> None:
+        await self.notifier.send_message(
+            chat_id,
+            "Kirim nomor telepon untuk login dashboard.",
+            reply_markup={
+                "keyboard": [[{"text": "Bagikan nomor telepon", "request_contact": True}]],
+                "resize_keyboard": True,
+                "one_time_keyboard": True,
+            },
+        )
+
+    async def _handle_contact(self, msg: Message, user: TelegramUser, chat_id: int) -> None:
+        contact = msg.contact
+        if not contact:
+            return
+
+        if contact.user_id and contact.user_id != chat_id:
+            await self.notifier.send_message(chat_id, "Nomor harus berasal dari akun Telegram Anda sendiri.")
+            return
+
+        phone_number = _normalize_phone(contact.phone_number)
+        if not phone_number:
+            await self.notifier.send_message(chat_id, "Nomor telepon tidak valid.")
+            return
+
+        user.phone_number = phone_number
+        await self.user_repo.upsert(user)
+        await self.notifier.send_message(
+            chat_id,
+            "Nomor telepon tersimpan. Sekarang Anda bisa login dashboard dengan nomor itu.",
+            reply_markup={"remove_keyboard": True},
+        )
+
     async def execute(self, update: Update) -> None:
         logger.info(f"Update diterima: {update.model_dump()}")
 
@@ -171,6 +240,7 @@ class HandleTelegramUpdate:
         msg: Message = update.message
         chat_id = msg.chat.id
         text = (msg.text or "").strip()
+        command = text.split(maxsplit=1)[0].lower().split("@", 1)[0] if text.startswith("/") else ""
 
         logger.info(f"Processing message from {chat_id}: '{text}'")
 
@@ -200,24 +270,48 @@ class HandleTelegramUpdate:
             await self._handle_photo(msg, user, chat_id)
             return
 
-        if text == "/start":
-            await self.notifier.send_message(
-                chat_id,
+        if msg.contact:
+            logger.info(f"Contact message received from {chat_id}")
+            await self._handle_contact(msg, user, chat_id)
+            return
+
+        if command == "/start":
+            message = (
                 f"Yo {user.first_name}! 🎉\n"
                 "Dompetmu layak punya teman yang ngerti—dan yep, itu aku! 😏\n"
                 "Ayo catat, pantau, dan rayakan tiap langkah kecilmu menuju finansial sehat! 🚀"
             )
+            if not user.phone_number:
+                message += "\n\nUntuk login dashboard, bagikan nomor telepon dulu."
+            await self.notifier.send_message(
+                chat_id,
+                message,
+                reply_markup=None if user.phone_number else {
+                    "keyboard": [[{"text": "Bagikan nomor telepon", "request_contact": True}]],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True,
+                },
+            )
+            return
+
+        if command == "/phone":
+            await self._send_phone_prompt(chat_id)
+            return
+
+        if command in {"/fitur", "/help"}:
+            logger.info(f"Feature guide command for user {chat_id}")
+            await self.notifier.send_message(chat_id, _get_features_message())
             return
 
         # Command legacy (backward compatibility) - diprioritaskan sebelum intent detection
-        if text == "/saldo":
+        if command == "/saldo":
             logger.info(f"Legacy command: /saldo for user {chat_id}")
             msg_response = await self.trans_service.get_balance_summary(chat_id)
             await self.notifier.send_message(chat_id, msg_response)
             return
 
-        if text == "/riwayat":
-            logger.info(f"Legacy command: /riwayat for user {chat_id}")
+        if command in {"/riwayat", "/history"}:
+            logger.info(f"Legacy command: {command} for user {chat_id}")
             msg_response = await self.trans_service.get_last_transactions(chat_id)
             await self.notifier.send_message(chat_id, msg_response)
             return

@@ -7,4 +7,10 @@ class TelegramUserRepo(Protocol):
     async def update_state(self, telegram_id: int, state: str, temp_data: dict) -> None: ...
 
 class TelegramNotifier(Protocol):
-    async def send_message(self, chat_id: int, text: str, parse_mode: str = "Markdown") -> bool: ...
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        parse_mode: str = "Markdown",
+        reply_markup: dict | None = None,
+    ) -> bool: ...

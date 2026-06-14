@@ -8,6 +8,7 @@ class TelegramUser:
     id: int
     first_name: str
     username: Optional[str]
+    phone_number: Optional[str] = None
     current_state: StateType = "IDLE"
     temp_data: Optional[dict] = None
     is_active: bool = True

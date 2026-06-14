@@ -4,6 +4,12 @@ from typing import Optional, List
 class Chat(BaseModel):
     id: int
     first_name: Optional[str] = None
+    username: Optional[str] = None
+
+class Contact(BaseModel):
+    phone_number: str
+    first_name: Optional[str] = None
+    user_id: Optional[int] = None
 
 class PhotoSize(BaseModel):
     file_id: str
@@ -17,6 +23,7 @@ class Message(BaseModel):
     chat: Chat
     text: Optional[str] = None
     caption: Optional[str] = None
+    contact: Optional[Contact] = None
     photo: Optional[List[PhotoSize]] = None
 
 class CallbackQuery(BaseModel):

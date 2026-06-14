@@ -16,6 +16,7 @@ class SysTelegramUser(Base):
 
     first_name: Mapped[str] = mapped_column(String(100))
     username: Mapped[Optional[str]] = mapped_column(String(50))
+    phone_number: Mapped[Optional[str]] = mapped_column(String(20), unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

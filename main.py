@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.interfaces.http.routers.telegram_webhook import router as telegram_router
 from app.interfaces.http.routers.receipt import router as receipt_router
 from app.interfaces.http.routers.debt import router as debt_router
+from app.interfaces.http.routers.dashboard import router as dashboard_router
 
 from app.core.logging import setup_logging
 
@@ -26,7 +27,7 @@ app.add_middleware(
 app.include_router(telegram_router)
 app.include_router(receipt_router)
 app.include_router(debt_router)
-app.include_router(receipt_router)
+app.include_router(dashboard_router)
 
 @app.get("/")
 async def root():
@@ -34,4 +35,4 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

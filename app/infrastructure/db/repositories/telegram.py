@@ -19,6 +19,7 @@ class SqlTelegramUserRepo(TelegramUserRepo):
             id=orm.id,
             first_name=orm.first_name,
             username=orm.username,
+            phone_number=orm.phone_number,
             # Pastikan field ini ada di Entity dan Model Anda
             current_state=orm.current_state,
             temp_data=orm.temp_data,
@@ -38,6 +39,7 @@ class SqlTelegramUserRepo(TelegramUserRepo):
         # Update Field
         orm.first_name = user.first_name
         orm.username = user.username
+        orm.phone_number = user.phone_number
         orm.current_state = user.current_state
         orm.temp_data = user.temp_data
         # orm.is_active = user.is_active
