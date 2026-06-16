@@ -1,4 +1,14 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: fm-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
@@ -9,3 +19,6 @@ services:
 
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  redis-data:

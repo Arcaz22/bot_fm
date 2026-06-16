@@ -21,8 +21,10 @@ async def resolve_process_receipt_usecase():
         return ProcessReceiptImage(receipt_service=receipt_service)
 from functools import lru_cache
 from fastapi import Depends
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.settings import settings
 from app.infrastructure.db.base import get_db
 
 # --- REPOSITORIES ---
@@ -31,6 +33,7 @@ from app.infrastructure.db.repositories.finance import FinanceRepo
 
 # --- CLIENTS & INFRA ---
 from app.infrastructure.telegram.client import TelegramClient
+from app.infrastructure.telegram.queue import TelegramUpdateQueue
 from app.infrastructure.llm.client import GeminiLLM
 
 # --- SERVICES & USECASES ---
@@ -51,6 +54,14 @@ def get_telegram_client():
 @lru_cache()
 def get_llm_client():
     return GeminiLLM()
+
+@lru_cache()
+def get_redis_client():
+    return Redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+@lru_cache()
+def get_telegram_update_queue():
+    return TelegramUpdateQueue(get_redis_client())
 
 # =========================================================
 # 2. REPOSITORIES (Scoped per Request)
@@ -104,3 +115,18 @@ async def get_manage_debt_usecase(
     debt_service: DebtService = Depends(get_debt_service)
 ):
     return ManageDebt(debt_service=debt_service)
+
+async def process_telegram_update_from_queue(update):
+    async with async_session() as session:
+        user_repo = SqlTelegramUserRepo(session)
+        finance_repo = FinanceRepo(session)
+        transaction_service = TransactionService(
+            llm=get_llm_client(),
+            repo=finance_repo,
+        )
+        usecase = HandleTelegramUpdate(
+            user_repo=user_repo,
+            notifier=get_telegram_client(),
+            trans_service=transaction_service,
+        )
+        await usecase.execute(update)

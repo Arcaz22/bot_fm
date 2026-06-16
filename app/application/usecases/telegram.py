@@ -5,12 +5,13 @@ from typing import Set
 from app.application.services.transaction_service import TransactionService
 from app.presentation.schemas.telegram import Update, Message
 from app.domain.telegram.entities import TelegramUser
-from app.domain.telegram.rules import ensure_active, reset_to_idle
+from app.domain.telegram.rules import ensure_active
 from app.domain.telegram.ports import TelegramUserRepo, TelegramNotifier
 from app.core.settings import settings
-from app.core.di import resolve_manage_debt_usecase, resolve_process_receipt_usecase
 
 logger = logging.getLogger(__name__)
+
+DASHBOARD_URL = "https://dashboard-finance.rampung.space"
 
 
 def _normalize_phone(phone_number: str) -> str:
@@ -39,14 +40,17 @@ def _detect_intent(text: str) -> str:
         "5 terakhir", "transaksi terakhir", "transaksi sebelumnya"
     ]
 
-    DEBT_KEYWORDS = {"hutang", "utang", "piutang", "berhutang", "berutang"}
+    MENU_KEYWORDS = {"menu", "help", "fitur", "bantuan"}
+    GREETING_KEYWORDS = {"halo", "hello", "hai", "hi", "test", "tes"}
+    DEBT_KEYWORDS = {
+        "hutang", "utang", "piutang", "berhutang", "berutang",
+        "pinjam", "minjem", "pinjem", "pinjamin", "pinjemin",
+        "pinjamkan", "meminjamkan",
+    }
     DEBT_QUERY_CTX = {"berapa", "cek", "lihat", "sisa", "daftar", "list", "ada", "punya"}
     DEBT_ACTION_CTX = {"bayar", "lunas", "lunasin", "setor", "kirim", "transfer"}
 
-    BALANCE_KEYWORDS = {
-        "saldo", "balance", "duit", "uang", "kekayaan", "dana",
-        "aset", "asset", "punya berapa", "sisa berapa"
-    }
+    BALANCE_KEYWORDS = {"saldo", "balance", "kekayaan", "dana", "aset", "asset"}
     BALANCE_NEGATIVE = {
         "beli", "bayar", "transfer", "kirim", "masuk", "keluar",
         "topup", "deposit", "tarik", "withdraw"
@@ -56,6 +60,14 @@ def _detect_intent(text: str) -> str:
     if any(phrase in text_lower for phrase in HISTORY_PHRASES):
         logger.debug(f"Intent HISTORY detected by phrase match: '{text}'")
         return "history"
+
+    if tokens & MENU_KEYWORDS:
+        logger.debug(f"Intent HELP detected by menu/help keyword: '{text}'")
+        return "help"
+
+    if len(tokens) <= 2 and tokens & GREETING_KEYWORDS:
+        logger.debug(f"Intent HELP detected by greeting/test keyword: '{text}'")
+        return "help"
 
     # 2. PRIORITAS 2: Debt Logic
     has_debt_keyword = bool(tokens & DEBT_KEYWORDS)
@@ -94,9 +106,20 @@ def _detect_intent(text: str) -> str:
         logger.debug(f"Intent HISTORY detected by single word fallback: '{text}'")
         return "history"
 
-    # 5. DEFAULT: Transaction (LLM Fallback)
-    logger.debug(f"Intent TRANSACTION detected as default fallback: '{text}'")
-    return "transaction"
+    has_amount = bool(re.search(r'\b\d+(?:[.,]\d+)?\s*(?:rb|ribu|k|jt|juta)?\b', text_lower))
+    has_transaction_keyword = bool(tokens & {
+        "makan", "minum", "beli", "belanja", "bayar", "transfer", "kirim",
+        "gaji", "gajian", "bonus", "masuk", "keluar", "topup", "deposit",
+        "tarik", "withdraw", "ovo", "gopay", "dana", "bca", "mandiri",
+        "bni", "bri", "cash", "tunai",
+    })
+
+    if has_amount or has_transaction_keyword:
+        logger.debug(f"Intent TRANSACTION detected by amount/keyword: '{text}'")
+        return "transaction"
+
+    logger.debug(f"Intent HELP detected as non-financial fallback: '{text}'")
+    return "help"
 
 
 def _get_features_message() -> str:
@@ -170,6 +193,7 @@ class HandleTelegramUpdate:
     async def _handle_photo(self, msg, user: TelegramUser, chat_id: int) -> None:
         """Handle pesan foto — proses sebagai struk belanja."""
         from app.application.dtos.extraction import ReceiptContext
+        from app.core.di import resolve_process_receipt_usecase
 
         await self.notifier.send_message(chat_id, "📸 Sedang membaca struk, tunggu sebentar...")
 
@@ -200,7 +224,10 @@ class HandleTelegramUpdate:
     async def _send_phone_prompt(self, chat_id: int) -> None:
         await self.notifier.send_message(
             chat_id,
-            "Kirim nomor telepon untuk login dashboard.",
+            (
+                "Bagikan nomor telepon Telegram Anda untuk login dashboard.\n"
+                f"Dashboard bisa diakses di {DASHBOARD_URL}"
+            ),
             reply_markup={
                 "keyboard": [[{"text": "Bagikan nomor telepon", "request_contact": True}]],
                 "resize_keyboard": True,
@@ -226,7 +253,10 @@ class HandleTelegramUpdate:
         await self.user_repo.upsert(user)
         await self.notifier.send_message(
             chat_id,
-            "Nomor telepon tersimpan. Sekarang Anda bisa login dashboard dengan nomor itu.",
+            (
+                "Nomor telepon tersimpan.\n"
+                f"Sekarang Anda bisa login dashboard di {DASHBOARD_URL} dengan nomor itu."
+            ),
             reply_markup={"remove_keyboard": True},
         )
 
@@ -282,7 +312,12 @@ class HandleTelegramUpdate:
                 "Ayo catat, pantau, dan rayakan tiap langkah kecilmu menuju finansial sehat! 🚀"
             )
             if not user.phone_number:
-                message += "\n\nUntuk login dashboard, bagikan nomor telepon dulu."
+                message += (
+                    "\n\nBagikan nomor telepon Telegram Anda untuk login dashboard.\n"
+                    f"Dashboard bisa diakses di {DASHBOARD_URL}"
+                )
+            else:
+                message += f"\n\nDashboard bisa diakses di {DASHBOARD_URL}"
             await self.notifier.send_message(
                 chat_id,
                 message,
@@ -327,18 +362,25 @@ class HandleTelegramUpdate:
                 await self.notifier.send_message(chat_id, msg_response)
                 return
 
-            elif intent == "history":
+            if intent == "history":
                 logger.info(f"Routing to HISTORY handler for user {chat_id}")
                 msg_response = await self.trans_service.get_last_transactions(chat_id)
                 await self.notifier.send_message(chat_id, msg_response)
                 return
 
-            elif intent == "debt":
+            if intent == "debt":
                 logger.info(f"Routing to DEBT handler for user {chat_id}")
+                from app.core.di import resolve_manage_debt_usecase
+
                 usecase = await resolve_manage_debt_usecase()
                 result = await usecase.get_debt_summary(chat_id)
                 msg_response = result.get("summary") or result.get("error", "Gagal mengambil data hutang/piutang")
                 await self.notifier.send_message(chat_id, msg_response)
+                return
+
+            if intent == "help":
+                logger.info(f"Routing to HELP handler for user {chat_id}")
+                await self.notifier.send_message(chat_id, _get_features_message())
                 return
 
             # Default: Transaction via LLM

@@ -1,18 +1,19 @@
-from fastapi import Query
-from fastapi.responses import JSONResponse
-
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 from app.presentation.schemas.telegram import Update, WebhookResponse
-from app.core.di import get_handle_update
+from app.core.di import get_telegram_update_queue
+from app.infrastructure.telegram.queue import TelegramUpdateQueue
 from app.application.services.telegram_service import TelegramWebhookService
 
 router = APIRouter(tags=["telegram"])
 
 @router.post("/webhook", response_model=WebhookResponse)
-async def telegram_webhook(update: Update, background_tasks: BackgroundTasks,
-                           uc = Depends(get_handle_update)):
-    background_tasks.add_task(uc.execute, update)
-    return WebhookResponse(status="success", message="Update processed")
+async def telegram_webhook(
+    update: Update,
+    update_queue: TelegramUpdateQueue = Depends(get_telegram_update_queue),
+):
+    queued = await update_queue.enqueue(update)
+    message = "Update queued" if queued else "Duplicate or unsupported update ignored"
+    return WebhookResponse(status="success", message=message)
 
 @router.get("/webhook/telegram/info")
 async def get_telegram_webhook_info():

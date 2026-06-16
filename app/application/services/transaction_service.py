@@ -9,23 +9,47 @@ from app.application.dtos.extraction import ExtractedTransaction
 logger = logging.getLogger(__name__)
 
 
+AMOUNT_PATTERN = r'\b\d+(?:[.,]\d+)?\s*(?:rb|ribu|k|jt|juta)?\b'
+SELF_PATTERN = r'(?:saya|aku|gue|gw)'
+
+
+def _clean_counterparty_name(name: str) -> str:
+    cleaned = re.sub(
+        r'\b(?:rp|idr|uang|duit|sebesar|senilai|ke|dari|sama|kepada)\b',
+        ' ',
+        name,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(AMOUNT_PATTERN, ' ', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip(" ,.-")
+    return cleaned.title()
+
+
+def _text_without_amount(text: str) -> str:
+    cleaned = re.sub(AMOUNT_PATTERN, ' ', text.lower())
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+
 def _extract_debt_hint(text: str) -> tuple[str | None, str | None]:
     text_lower = text.lower().strip()
+    text_no_amount = _text_without_amount(text_lower)
 
     patterns = [
-        ("PAY", r'\b(?:bayar|lunasin|lunas(?:kan)?)\s+(?:hutang|utang)\s+(?:ke|sama|kepada)\s+(.+?)(?:\s+\d|$)'),
-        ("LEND", r'^(.+?)\s+(?:hutang|utang|berhutang|berutang)\s+(?:ke|sama|kepada)\s+(?:saya|aku|gue|gw)\b'),
-        ("BORROW", r'\b(?:hutang|utang|berhutang|berutang)\s+(?:ke|sama|kepada)\s+(.+?)(?:\s+\d|$)'),
-        ("BORROW", r'\b(?:pinjam|minjem)\s+(?:dari|ke|sama)\s+(.+?)(?:\s+\d|$)'),
-        ("LEND", r'\b(?:piutang|pinjemin|pinjamin)\s+(?:ke|sama|kepada)?\s*(.+?)(?:\s+\d|$)'),
+        ("PAY", rf'\b(?:bayar|lunasin|lunas(?:kan)?)\s+(?:hutang|utang)\s+(?:ke|sama|kepada)\s+(.+?)$'),
+        ("LEND", rf'^(.+?)\s+(?:hutang|utang|berhutang|berutang|pinjam|minjem|pinjem)\s+(?:ke|sama|kepada|dari)\s+{SELF_PATTERN}\b'),
+        ("BORROW", rf'\b{SELF_PATTERN}?\s*(?:hutang|utang|berhutang|berutang)\s+(?:ke|sama|kepada)\s+(.+?)$'),
+        ("BORROW", rf'\b{SELF_PATTERN}?\s*(?:pinjam|minjem|pinjem)\s+(?:uang|duit)?\s*(?:dari|ke|sama|kepada)\s+(.+?)$'),
+        ("LEND", r'\b(?:piutang|pinjemin|pinjamin|pinjamkan|meminjamkan)\s+(?:ke|sama|kepada)?\s*(.+?)$'),
+        ("LEND", r'\b(?:kasih|beri)\s+pinjam\s+(?:ke|sama|kepada)?\s*(.+?)$'),
     ]
 
     for action, pattern in patterns:
-        match = re.search(pattern, text_lower)
+        match = re.search(pattern, text_no_amount)
         if match:
-            name = re.sub(r'\b(?:rp|idr)\b', '', match.group(1), flags=re.IGNORECASE).strip(" ,.-")
+            name = _clean_counterparty_name(match.group(1))
             if name:
-                return action, name.title()
+                return action, name
 
     return None, None
 

@@ -2,4 +2,4 @@
 
 ## Documentation
 
-- [Dashboard API](docs/dashboard.md)
+- [Telegram Redis Queue Flow](docs/telegram-redis-queue.md)

@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     AI_FREE_QUOTA: int
     AI_WHITELIST_USER_IDS: str | None = None
 
+    REDIS_URL: str = "redis://localhost:6379/0"
+    TELEGRAM_QUEUE_WORKERS: int = 2
+    TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS: int = 604800
+    TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS: int = 300
+
     @property
     def database_url(self) -> str:
         url = self.DATABASE_URL
