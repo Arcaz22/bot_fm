@@ -24,10 +24,9 @@ def _normalize_phone(phone_number: str) -> str:
 def _detect_intent(text: str) -> str:
     """
     Hybrid Intent Detection dengan prioritas eksplisit:
-    1. History (frasa spesifik)
-    2. Debt (dengan konteks query vs action)
-    3. Balance (dengan negative lookahead)
-    4. Transaction (default fallback ke LLM)
+    1. Dashboard data request (saldo, riwayat, query hutang/piutang)
+    2. Debt action (catat/bayar hutang)
+    3. Transaction (default fallback ke LLM)
 
     Menggunakan token-based matching untuk menghindari false positive substring.
     """
@@ -56,10 +55,10 @@ def _detect_intent(text: str) -> str:
         "topup", "deposit", "tarik", "withdraw"
     }
 
-    # 1. PRIORITAS 1: History (frasa spesifik paling eksplisit)
+    # 1. PRIORITAS 1: Semua permintaan baca data diarahkan ke dashboard.
     if any(phrase in text_lower for phrase in HISTORY_PHRASES):
-        logger.debug(f"Intent HISTORY detected by phrase match: '{text}'")
-        return "history"
+        logger.debug(f"Intent DASHBOARD detected by history phrase match: '{text}'")
+        return "dashboard"
 
     if tokens & MENU_KEYWORDS:
         logger.debug(f"Intent HELP detected by menu/help keyword: '{text}'")
@@ -84,8 +83,8 @@ def _detect_intent(text: str) -> str:
             logger.debug(f"Intent TRANSACTION detected: debt record with amount '{text}'")
             return "transaction"
         elif has_query or len(tokens) <= 4:
-            logger.debug(f"Intent DEBT detected by query context: '{text}'")
-            return "debt"
+            logger.debug(f"Intent DASHBOARD detected by debt query context: '{text}'")
+            return "dashboard"
         logger.debug(f"Intent TRANSACTION detected: debt keyword ambiguous '{text}'")
         return "transaction"
 
@@ -98,13 +97,13 @@ def _detect_intent(text: str) -> str:
             logger.debug(f"Intent TRANSACTION detected: balance keyword excluded by context '{text}'")
             return "transaction"
         else:
-            logger.debug(f"Intent BALANCE detected: '{text}'")
-            return "balance"
+            logger.debug(f"Intent DASHBOARD detected by balance query: '{text}'")
+            return "dashboard"
 
     # 4. PRIORITAS 4: History (single word fallback)
     if any(kw in tokens for kw in {"riwayat", "history", "histori"}):
-        logger.debug(f"Intent HISTORY detected by single word fallback: '{text}'")
-        return "history"
+        logger.debug(f"Intent DASHBOARD detected by history single word fallback: '{text}'")
+        return "dashboard"
 
     has_amount = bool(re.search(r'\b\d+(?:[.,]\d+)?\s*(?:rb|ribu|k|jt|juta)?\b', text_lower))
     has_transaction_keyword = bool(tokens & {
@@ -125,29 +124,32 @@ def _detect_intent(text: str) -> str:
 def _get_features_message() -> str:
     return (
         "📌 **Fitur Bot Keuangan**\n\n"
-        "**Perintah cepat:**\n"
-        "• `/start` - mulai pakai bot dan daftar user Telegram.\n"
-        "• `/saldo` - lihat saldo semua wallet dan total aset.\n"
-        "• `/riwayat` atau `/history` - lihat 5 transaksi terakhir.\n"
-        "• `/phone` - simpan nomor Telegram untuk login dashboard.\n"
-        "• `/fitur` atau `/help` - lihat panduan ini.\n\n"
-        "**NLP / chat biasa:**\n"
-        "Ketik transaksi seperti ngobrol, tanpa command.\n"
-        "Contoh:\n"
+        "Bot ini dipakai untuk **mencatat data keuangan** lewat chat. "
+        "Untuk melihat saldo, riwayat transaksi, hutang, dan piutang, buka dashboard:\n"
+        f"{DASHBOARD_URL}\n\n"
+        "⚙️ **Perintah**\n"
+        "• `/start` - mulai pakai bot dan daftar akun Telegram\n"
+        "• `/phone` - simpan nomor Telegram untuk login dashboard\n"
+        "• `/fitur` atau `/help` - tampilkan panduan ini\n\n"
+        "💬 **Catat transaksi**\n"
+        "Ketik transaksi seperti ngobrol, tanpa format khusus.\n"
         "• `makan siang 25rb pake OVO`\n"
         "• `gajian 5 juta masuk BCA`\n"
         "• `transfer 100rb dari BCA ke Gopay`\n\n"
-        "**Saldo dan riwayat via NLP:**\n"
-        "• `saldo saya berapa?`\n"
-        "• `lihat transaksi terakhir`\n\n"
-        "**Hutang / piutang via NLP:**\n"
+        "🤝 **Catat hutang/piutang**\n"
         "• `hutang ke Budi 50rb`\n"
         "• `Sari hutang ke saya 75rb`\n"
-        "• `bayar hutang ke Budi 25rb`\n"
-        "• `cek hutang` atau `lihat piutang`\n\n"
-        "**AI Vision / foto struk:**\n"
-        "Kirim foto struk atau nota belanja. Bot akan membaca item dan menyimpannya sebagai transaksi expense.\n"
-        "Tambahkan caption jika perlu catatan tambahan."
+        "• `bayar hutang ke Budi 25rb`\n\n"
+        "🧾 **Catat dari struk**\n"
+        "Kirim foto struk atau nota belanja. Bot akan membaca item dan menyimpannya sebagai transaksi.\n"
+        "Tambahkan caption jika ingin menyimpan catatan tambahan."
+    )
+
+
+def _get_dashboard_redirect_message() -> str:
+    return (
+        "Data saldo, riwayat transaksi, hutang, dan piutang sekarang tersedia di dashboard.\n"
+        f"Buka: {DASHBOARD_URL}"
     )
 
 
@@ -338,44 +340,21 @@ class HandleTelegramUpdate:
             await self.notifier.send_message(chat_id, _get_features_message())
             return
 
-        # Command legacy (backward compatibility) - diprioritaskan sebelum intent detection
-        if command == "/saldo":
-            logger.info(f"Legacy command: /saldo for user {chat_id}")
-            msg_response = await self.trans_service.get_balance_summary(chat_id)
-            await self.notifier.send_message(chat_id, msg_response)
+        # Command baca data lama tidak lagi mengambil data dari Telegram.
+        if command in {"/saldo", "/riwayat", "/history", "/hutang", "/piutang"}:
+            logger.info(f"Deprecated data command {command} for user {chat_id}, redirecting to dashboard")
+            await self.notifier.send_message(chat_id, _get_dashboard_redirect_message())
             return
 
-        if command in {"/riwayat", "/history"}:
-            logger.info(f"Legacy command: {command} for user {chat_id}")
-            msg_response = await self.trans_service.get_last_transactions(chat_id)
-            await self.notifier.send_message(chat_id, msg_response)
-            return
 
         # --- 4. Intent-Based Routing (Hanya jika IDLE) ---
         if user.current_state == "IDLE":
             intent = _detect_intent(text)
             logger.info(f"User {chat_id} | Detected Intent: [{intent}] | Text: '{text}'")
 
-            if intent == "balance":
-                logger.info(f"Routing to BALANCE handler for user {chat_id}")
-                msg_response = await self.trans_service.get_balance_summary(chat_id)
-                await self.notifier.send_message(chat_id, msg_response)
-                return
-
-            if intent == "history":
-                logger.info(f"Routing to HISTORY handler for user {chat_id}")
-                msg_response = await self.trans_service.get_last_transactions(chat_id)
-                await self.notifier.send_message(chat_id, msg_response)
-                return
-
-            if intent == "debt":
-                logger.info(f"Routing to DEBT handler for user {chat_id}")
-                from app.core.di import resolve_manage_debt_usecase
-
-                usecase = await resolve_manage_debt_usecase()
-                result = await usecase.get_debt_summary(chat_id)
-                msg_response = result.get("summary") or result.get("error", "Gagal mengambil data hutang/piutang")
-                await self.notifier.send_message(chat_id, msg_response)
+            if intent == "dashboard":
+                logger.info(f"Routing data request to DASHBOARD for user {chat_id}")
+                await self.notifier.send_message(chat_id, _get_dashboard_redirect_message())
                 return
 
             if intent == "help":
