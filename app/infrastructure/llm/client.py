@@ -1,12 +1,63 @@
-import google.generativeai as genai
+import base64
 import json
 import logging
-import base64
-from typing import Optional, Dict, Any
-from app.domain.llm.ports import LLMPort
+from contextlib import contextmanager
+from functools import lru_cache
+from typing import Any, Dict, Iterator, Optional
+
+import google.generativeai as genai
+from langfuse import Langfuse
+
 from app.core.settings import settings
+from app.domain.llm.ports import LLMPort
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _get_langfuse_client() -> Optional[Langfuse]:
+    """Create one optional Langfuse client for the application process."""
+    if not settings.LANGFUSE_SECRET_KEY or not settings.LANGFUSE_PUBLIC_KEY:
+        logger.info("Langfuse monitoring nonaktif: credentials belum dikonfigurasi")
+        return None
+
+    try:
+        client = Langfuse(
+            secret_key=settings.LANGFUSE_SECRET_KEY,
+            public_key=settings.LANGFUSE_PUBLIC_KEY,
+            base_url=settings.LANGFUSE_BASE_URL,
+        )
+        logger.info("Langfuse monitoring aktif")
+        return client
+    except Exception:
+        # Observability must never make the primary LLM client unavailable.
+        logger.exception("Gagal menginisialisasi Langfuse; tracing dinonaktifkan")
+        return None
+
+
+def _usage_details(response: Any) -> Optional[Dict[str, int]]:
+    """Translate Gemini usage metadata to Langfuse's normalized token fields."""
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return None
+
+    fields = {
+        "input": getattr(usage, "prompt_token_count", None),
+        "output": getattr(usage, "candidates_token_count", None),
+        "total": getattr(usage, "total_token_count", None),
+    }
+    normalized = {key: int(value) for key, value in fields.items() if value is not None}
+    return normalized or None
+
+
+def shutdown_langfuse_client() -> None:
+    """Flush pending observations when the application process stops."""
+    if _get_langfuse_client.cache_info().currsize == 0:
+        return
+
+    client = _get_langfuse_client()
+    if client is not None:
+        client.shutdown()
 
 
 class GeminiLLM(LLMPort):
@@ -16,6 +67,13 @@ class GeminiLLM(LLMPort):
 
         genai.configure(api_key=settings.GOOGLE_API_KEY)
 
+        self.model_name = model_name
+        self.generation_parameters = {
+            "temperature": 0.1,
+            "top_p": 0.9,
+            "max_output_tokens": 1024,
+            "response_mime_type": "application/json",
+        }
         self.generation_config = genai.GenerationConfig(
             response_mime_type="application/json",
             temperature=0.1,
@@ -27,10 +85,58 @@ class GeminiLLM(LLMPort):
             model_name=model_name,
             generation_config=self.generation_config
         )
+        self.langfuse = _get_langfuse_client()
 
         logger.info(f"GeminiLLM initialized with model: {model_name}")
 
-    async def parse_transaction(self, text: str) -> Dict[str, Any]:
+    @contextmanager
+    def _observe_generation(
+        self,
+        *,
+        name: str,
+        input: Any,
+        model_parameters: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Iterator[Any]:
+        if self.langfuse is None:
+            yield None
+            return
+
+        with self.langfuse.start_as_current_observation(
+            as_type="generation",
+            name=name,
+            input=input,
+            model=self.model_name,
+            model_parameters=model_parameters,
+            metadata=metadata,
+        ) as generation:
+            yield generation
+
+    @staticmethod
+    def _record_response(generation: Any, response: Any) -> Dict[str, int]:
+        usage = _usage_details(response) or {}
+        if generation is not None:
+            generation.update(
+                output=response.text.strip(),
+                usage_details=usage or None,
+            )
+        return usage
+
+    def _result_with_usage(
+        self,
+        data: Dict[str, Any],
+        usage: Dict[str, int],
+        include_usage: bool,
+    ) -> Dict[str, Any]:
+        if not include_usage:
+            return data
+        return {"data": data, "usage": usage, "model": self.model_name}
+
+    async def parse_transaction(
+        self,
+        text: str,
+        include_usage: bool = False,
+    ) -> Dict[str, Any]:
         system_prompt = """
         Ekstrak detail transaksi dari teks bahasa Indonesia. Return JSON dengan field:
 
@@ -49,19 +155,36 @@ class GeminiLLM(LLMPort):
         - "Bayar hutang ke X" / "Lunasin X" → PAY (EXPENSE)
         - Tidak ada konteks hutang → NONE
 
+        Aturan tarik tunai:
+        - "Tarik tunai" / "penarikan tunai" adalah TRANSFER dari wallet sumber
+          ke wallet "Cash", bukan EXPENSE.
+        - Gunakan category "Cash Withdrawal" dan target_wallet_name "Cash".
+
         Contoh:
         - "Beli kopi 25rb pake Gopay" → EXPENSE, amount: 25000, wallet: Gopay
         - "Transfer 50rb BCA ke OVO" → TRANSFER, wallet: BCA, target: OVO
+        - "Tarik tunai 500rb dari BCA" → TRANSFER, wallet: BCA, target: Cash
         - "Pinjam 100k dari Budi" → BORROW, INCOME, counterparty: Budi
         - "Bayar hutang ke Sari 50k" → PAY, EXPENSE, counterparty: Sari
         """
 
+        usage: Dict[str, int] = {}
         try:
             logger.debug(f"Parsing transaction: '{text}'")
 
-            response = await self.model.generate_content_async(
-                f"{system_prompt}\n\nInput User: {text}"
-            )
+            with self._observe_generation(
+                name="gemini.parse_transaction",
+                input={
+                    "system_instruction": system_prompt.strip(),
+                    "user": text,
+                },
+                model_parameters=self.generation_parameters,
+                metadata={"operation": "parse_transaction"},
+            ) as generation:
+                response = await self.model.generate_content_async(
+                    f"{system_prompt}\n\nInput User: {text}"
+                )
+                usage = self._record_response(generation, response)
 
             raw_json = response.text.strip()
             logger.debug(f"Gemini response: {raw_json[:200]}...")
@@ -88,24 +211,26 @@ class GeminiLLM(LLMPort):
             parsed.setdefault("description", text[:50])
 
             logger.info(f"Transaction parsed successfully: {parsed.get('transaction_type')}")
-            return parsed
+            return self._result_with_usage(parsed, usage, include_usage)
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON Decode Error: {e}")
-            return {
+            data = {
                 "error": "Gagal parse format JSON dari AI",
                 "transaction_type": "EXPENSE",
                 "debt_action": "NONE",
                 "amount": 0
             }
+            return self._result_with_usage(data, usage, include_usage)
         except genai.types.BlockedPromptException as e:
             logger.warning(f"Prompt diblokir oleh Gemini safety filter: {e}")
-            return {
+            data = {
                 "error": "Konten tidak dapat diproses oleh AI",
                 "transaction_type": "EXPENSE",
                 "debt_action": "NONE",
                 "amount": 0
             }
+            return self._result_with_usage(data, usage, include_usage)
         except Exception as e:
             logger.error(f"Gemini Error: {type(e).__name__} - {e}")
             raise
@@ -113,7 +238,8 @@ class GeminiLLM(LLMPort):
     async def parse_receipt_image(
         self,
         image_bytes: bytes,
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        include_usage: bool = False,
     ) -> Dict[str, Any]:
         system_prompt = """
         Analisis gambar struk/nota dan ekstrak detail transaksi. Return JSON:
@@ -135,6 +261,7 @@ class GeminiLLM(LLMPort):
         if context:
             system_prompt += f"\n\nKonteks tambahan: {context}"
 
+        usage: Dict[str, int] = {}
         try:
             logger.debug(f"Parsing receipt image, size: {len(image_bytes)} bytes")
 
@@ -152,10 +279,28 @@ class GeminiLLM(LLMPort):
                 max_output_tokens=8192,
             )
 
-            response = await self.model.generate_content_async(
-                [system_prompt, image_part],
-                generation_config=receipt_config,
-            )
+            receipt_parameters = {
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "max_output_tokens": 8192,
+                "response_mime_type": "application/json",
+            }
+            with self._observe_generation(
+                name="gemini.parse_receipt_image",
+                input={
+                    "system_instruction": system_prompt.strip(),
+                    # Do not duplicate a potentially large base64 image in traces.
+                    "image": {"mime_type": "image/jpeg", "size_bytes": len(image_bytes)},
+                    "context": context,
+                },
+                model_parameters=receipt_parameters,
+                metadata={"operation": "parse_receipt_image"},
+            ) as generation:
+                response = await self.model.generate_content_async(
+                    [system_prompt, image_part],
+                    generation_config=receipt_config,
+                )
+                usage = self._record_response(generation, response)
 
             raw_json = response.text.strip()
             logger.debug(f"Gemini Vision response: {raw_json[:200]}...")
@@ -178,31 +323,39 @@ class GeminiLLM(LLMPort):
             parsed.setdefault("transaction_date", None)
 
             logger.info(f"Receipt parsed successfully, total: {parsed['total']}")
-            return parsed
+            return self._result_with_usage(parsed, usage, include_usage)
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON Decode Error: {e}")
-            return {
+            data = {
                 "error": "Gagal parse format JSON dari AI Vision",
                 "total": 0,
                 "items": []
             }
+            return self._result_with_usage(data, usage, include_usage)
         except genai.types.BlockedPromptException as e:
             logger.warning(f"Image diblokir oleh Gemini safety filter: {e}")
-            return {
+            data = {
                 "error": "Gambar tidak dapat diproses oleh AI",
                 "total": 0,
                 "items": []
             }
+            return self._result_with_usage(data, usage, include_usage)
         except Exception as e:
             logger.error(f"Gemini Vision Error: {type(e).__name__} - {e}")
-            return {
+            data = {
                 "error": str(e),
                 "total": 0,
                 "items": []
             }
+            return self._result_with_usage(data, usage, include_usage)
 
-    async def chat_completion(self, prompt: str, system_instruction: Optional[str] = None) -> str:
+    async def chat_completion_with_usage(
+        self,
+        prompt: str,
+        system_instruction: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run a test completion and return output plus Gemini token usage."""
         try:
             if system_instruction:
                 full_prompt = f"{system_instruction}\n\n{prompt}"
@@ -218,9 +371,33 @@ class GeminiLLM(LLMPort):
                 )
             )
 
-            response = await chat_model.generate_content_async(full_prompt)
-            return response.text.strip()
+            chat_parameters = {
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_output_tokens": 2048,
+            }
+            with self._observe_generation(
+                name="gemini.chat_completion",
+                input={
+                    "system_instruction": system_instruction,
+                    "user": prompt,
+                },
+                model_parameters=chat_parameters,
+                metadata={"operation": "chat_completion"},
+            ) as generation:
+                response = await chat_model.generate_content_async(full_prompt)
+                usage = self._record_response(generation, response)
+
+            return {
+                "output": response.text.strip(),
+                "usage": usage,
+                "model": self.model_name,
+            }
 
         except Exception as e:
             logger.error(f"Chat Completion Error: {e}")
             raise
+
+    async def chat_completion(self, prompt: str, system_instruction: Optional[str] = None) -> str:
+        result = await self.chat_completion_with_usage(prompt, system_instruction)
+        return str(result["output"])

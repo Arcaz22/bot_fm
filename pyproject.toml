@@ -14,4 +14,5 @@ dependencies = [
     "google-generativeai>=0.8.6",
     "pillow>=12.1.0",
     "redis>=6.4.0",
+    "langfuse>=4.12.0",
 ]

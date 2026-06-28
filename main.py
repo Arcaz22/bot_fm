@@ -12,10 +12,12 @@ from app.core.di import (
 )
 from app.core.settings import settings
 from app.infrastructure.telegram.queue import close_redis
+from app.infrastructure.llm.client import shutdown_langfuse_client
 from app.interfaces.http.routers.telegram_webhook import router as telegram_router
 from app.interfaces.http.routers.receipt import router as receipt_router
 from app.interfaces.http.routers.debt import router as debt_router
 from app.interfaces.http.routers.dashboard import router as dashboard_router
+from app.interfaces.http.routers.langfuse import router as langfuse_router
 
 from app.core.logging import setup_logging
 
@@ -45,6 +47,7 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await worker
         await close_redis(get_redis_client())
+        shutdown_langfuse_client()
         logger.info("Stopped Telegram Redis queue worker(s)")
 
 app = FastAPI(
@@ -66,6 +69,7 @@ app.include_router(telegram_router)
 app.include_router(receipt_router)
 app.include_router(debt_router)
 app.include_router(dashboard_router)
+app.include_router(langfuse_router)
 
 @app.get("/")
 async def root():

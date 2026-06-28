@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS: int = 604800
     TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS: int = 300
 
+    LANGFUSE_SECRET_KEY: str | None = None
+    LANGFUSE_PUBLIC_KEY: str | None = None
+    LANGFUSE_BASE_URL: str = "http://localhost:3000"
+    LANGFUSE_TEST_INTERFACE_ENABLED: bool = False
+    LANGFUSE_TEST_INTERFACE_TOKEN: str | None = None
+
     @property
     def database_url(self) -> str:
         url = self.DATABASE_URL

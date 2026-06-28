@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 AMOUNT_PATTERN = r'\b\d+(?:[.,]\d+)?\s*(?:rb|ribu|k|jt|juta)?\b'
 SELF_PATTERN = r'(?:saya|aku|gue|gw)'
+CASH_WITHDRAWAL_PATTERN = r'\b(?:tarik\s+tunai|penarikan\s+tunai|cash\s+withdrawal|withdraw(?:al)?\s+cash)\b'
 
 
 def _clean_counterparty_name(name: str) -> str:
@@ -70,6 +71,10 @@ def _extract_amount(text: str) -> float | None:
     return amount
 
 
+def _is_cash_withdrawal(text: str) -> bool:
+    return bool(re.search(CASH_WITHDRAWAL_PATTERN, text, flags=re.IGNORECASE))
+
+
 class TransactionService:
     def __init__(self, llm: LLMPort, repo: FinanceRepoPort):
         self.llm = llm
@@ -79,6 +84,7 @@ class TransactionService:
         try:
             debt_action, counterparty_name = _extract_debt_hint(text)
             amount_hint = _extract_amount(text)
+            is_cash_withdrawal = _is_cash_withdrawal(text)
 
             if debt_action and counterparty_name and amount_hint:
                 data = ExtractedTransaction(
@@ -93,9 +99,33 @@ class TransactionService:
             else:
                 raw_data = await self.llm.parse_transaction(text)
                 if "error" in raw_data:
-                    return "🤖 Maaf, saya gagal paham. Coba kalimat simpel: 'Makan 20rb pake OVO' atau 'Transfer 50rb dari BCA ke Gopay'"
+                    if is_cash_withdrawal and amount_hint:
+                        raw_data = {
+                            "amount": amount_hint,
+                            "category": "Cash Withdrawal",
+                            "wallet_name": "BCA",
+                            "target_wallet_name": "Cash",
+                            "description": text[:50],
+                            "transaction_type": "TRANSFER",
+                            "debt_action": "NONE",
+                            "counterparty_name": None,
+                        }
+                    else:
+                        return "🤖 Maaf, saya gagal paham. Coba kalimat simpel: 'Makan 20rb pake OVO' atau 'Transfer 50rb dari BCA ke Gopay'"
 
                 data = ExtractedTransaction(**raw_data)
+
+            # Tarik tunai adalah perpindahan aset dari rekening ke uang fisik,
+            # bukan pengeluaran. Jangan bergantung pada klasifikasi LLM untuk ini.
+            if is_cash_withdrawal:
+                data.transaction_type = "TRANSFER"
+                data.target_wallet_name = "Cash"
+                data.category = "Cash Withdrawal"
+                data.debt_action = "NONE"
+                data.counterparty_name = None
+
+                if rules.normalize_wallet_name(data.wallet_name) == "Cash":
+                    data.wallet_name = "BCA"
 
             # Fallback wallet default jika tidak ada wallet_name
             if not getattr(data, "wallet_name", None):
