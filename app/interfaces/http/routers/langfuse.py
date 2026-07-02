@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from app.core.di import get_llm_client
 from app.core.settings import settings
-from app.infrastructure.llm.client import GeminiLLM
+from app.domain.llm.ports import LLMPort
 from app.presentation.schemas.langfuse import ExtractionTestResponse, TokenUsage, TransactionTestRequest
 
 
@@ -45,7 +45,7 @@ async def langfuse_test_page() -> HTMLResponse:
 async def test_transaction(
     payload: TransactionTestRequest,
     x_langfuse_test_token: str | None = Header(default=None),
-    llm: GeminiLLM = Depends(get_llm_client),
+    llm: LLMPort = Depends(get_llm_client),
 ) -> ExtractionTestResponse:
     _ensure_interface_enabled()
     _verify_test_token(x_langfuse_test_token)
@@ -66,7 +66,7 @@ async def test_receipt(
     file: UploadFile = File(...),
     context: str | None = Form(default=None, max_length=1000),
     x_langfuse_test_token: str | None = Header(default=None),
-    llm: GeminiLLM = Depends(get_llm_client),
+    llm: LLMPort = Depends(get_llm_client),
 ) -> ExtractionTestResponse:
     _ensure_interface_enabled()
     _verify_test_token(x_langfuse_test_token)
@@ -125,7 +125,7 @@ PAGE_HTML = """<!doctype html>
   <main>
     <section class="panel">
       <h1>Langfuse Token Test</h1>
-      <p>Uji parsing transaksi atau scan nota langsung ke Gemini tanpa menyimpan ke database aplikasi.</p>
+      <p>Uji parsing transaksi atau scan nota langsung ke provider LLM tanpa menyimpan ke database aplikasi.</p>
       <form id="test-form">
         <label for="token">Access token</label>
         <input id="token" type="password" autocomplete="off" required>
@@ -146,7 +146,7 @@ PAGE_HTML = """<!doctype html>
           <textarea id="context" placeholder="Contoh: belanja bulanan"></textarea>
           <p class="hint">System instruction scan nota dari aplikasi digunakan otomatis.</p>
         </section>
-        <button id="submit" type="submit">Kirim ke Gemini</button>
+        <button id="submit" type="submit">Kirim ke LLM</button>
       </form>
       <section id="result" class="result">
         <div id="usage" class="usage"></div>
@@ -237,7 +237,7 @@ PAGE_HTML = """<!doctype html>
         output.textContent = error.message;
       } finally {
         button.disabled = false;
-        button.textContent = 'Kirim ke Gemini';
+        button.textContent = 'Kirim ke LLM';
       }
     });
   </script>

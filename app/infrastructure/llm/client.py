@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import logging
 from contextlib import contextmanager
@@ -7,6 +8,7 @@ from typing import Any, Dict, Iterator, Optional
 
 import google.generativeai as genai
 from langfuse import Langfuse
+from PIL import Image
 
 from app.core.settings import settings
 from app.domain.llm.ports import LLMPort
@@ -59,6 +61,44 @@ def shutdown_langfuse_client() -> None:
     if client is not None:
         client.shutdown()
 
+def _compress_receipt_image(
+    image_bytes: bytes,
+    max_side: int = 1024,
+    jpeg_quality: int = 80,
+) -> bytes:
+    """Downscale + re-encode a receipt photo before sending it to Gemini Vision.
+
+    Vision token cost scales with image resolution. Phone camera photos are
+    usually far higher resolution than needed to read a receipt's text, so
+    resizing to a reasonable max dimension cuts input tokens without hurting
+    OCR accuracy on the printed text.
+    """
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        image = image.convert("RGB")  # drop alpha/CMYK edge cases, normalize for JPEG
+
+        width, height = image.size
+        longest_side = max(width, height)
+        if longest_side > max_side:
+            scale = max_side / longest_side
+            new_size = (int(width * scale), int(height * scale))
+            image = image.resize(new_size, Image.LANCZOS)
+
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
+        compressed_bytes = buffer.getvalue()
+
+        logger.debug(
+            "Receipt image compressed: %d -> %d bytes (%dx%d -> %dx%d)",
+            len(image_bytes), len(compressed_bytes), width, height, *image.size,
+        )
+        return compressed_bytes
+    except Exception:
+        # If Pillow can't process the image for any reason, fall back to the
+        # original bytes rather than breaking the whole receipt flow.
+        logger.exception("Gagal kompres gambar nota, memakai gambar asli")
+        return image_bytes
+    
 
 class GeminiLLM(LLMPort):
     def __init__(self, model_name: str = "gemini-2.5-flash"):
@@ -263,9 +303,12 @@ class GeminiLLM(LLMPort):
 
         usage: Dict[str, int] = {}
         try:
-            logger.debug(f"Parsing receipt image, size: {len(image_bytes)} bytes")
+            logger.debug(f"Parsing receipt image, original size: {len(image_bytes)} bytes")
 
-            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            compressed_bytes = _compress_receipt_image(image_bytes)
+            logger.debug(f"Parsing receipt image, compressed size: {len(compressed_bytes)} bytes")
+
+            image_base64 = base64.b64encode(compressed_bytes).decode('utf-8')
 
             image_part = {
                 "mime_type": "image/jpeg",
@@ -290,7 +333,11 @@ class GeminiLLM(LLMPort):
                 input={
                     "system_instruction": system_prompt.strip(),
                     # Do not duplicate a potentially large base64 image in traces.
-                    "image": {"mime_type": "image/jpeg", "size_bytes": len(image_bytes)},
+                    "image": {
+                        "mime_type": "image/jpeg",
+                        "size_bytes_original": len(image_bytes),
+                        "size_bytes_sent": len(compressed_bytes),
+                    },
                     "context": context,
                 },
                 model_parameters=receipt_parameters,

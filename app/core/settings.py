@@ -2,25 +2,37 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    GOOGLE_API_KEY: str
+    # --- LLM & AI Providers ---
+    LLM_PROVIDER: str
+    GOOGLE_API_KEY: str | None = None
+    OLLAMA_BASE_URL: str
+    OLLAMA_TEXT_MODEL: str
+    OLLAMA_VISION_MODEL: str
+    OLLAMA_TIMEOUT_SECONDS: float
+
+    # --- App & Telegram ---
     APP_PORT: int
     TELEGRAM_TOKEN: str
     WEBHOOK_URL: str | None = None
 
+    # --- Database ---
     DATABASE_URL: str = Field(..., alias="DATABASE_URL")
 
+    # --- AI Quota & Whitelist ---
     AI_FREE_QUOTA: int
     AI_WHITELIST_USER_IDS: str | None = None
 
-    REDIS_URL: str = "redis://localhost:6379/0"
-    TELEGRAM_QUEUE_WORKERS: int = 2
-    TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS: int = 604800
-    TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS: int = 300
+    # --- Redis & Queue ---
+    REDIS_URL: str
+    TELEGRAM_QUEUE_WORKERS: int
+    TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS: int
+    TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS: int
 
+    # --- Langfuse (Observability) ---
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_PUBLIC_KEY: str | None = None
-    LANGFUSE_BASE_URL: str = "http://localhost:3000"
-    LANGFUSE_TEST_INTERFACE_ENABLED: bool = False
+    LANGFUSE_BASE_URL: str
+    LANGFUSE_TEST_INTERFACE_ENABLED: bool
     LANGFUSE_TEST_INTERFACE_TOKEN: str | None = None
 
     @property

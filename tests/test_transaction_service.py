@@ -1,4 +1,3 @@
-import unittest
 from types import SimpleNamespace
 
 from app.application.services.transaction_service import TransactionService
@@ -20,12 +19,18 @@ class FakeLLM:
 
 class FakeRepo:
     def __init__(self):
-        self.wallets = {"BCA": SimpleNamespace(id=1, name="BCA")}
+        self.wallets = {
+            "BCA": SimpleNamespace(id=1, name="BCA")
+        }
         self.created_transaction = None
 
     async def get_wallet_by_name(self, user_id, name):
         return next(
-            (wallet for wallet_name, wallet in self.wallets.items() if wallet_name.lower() == name.lower()),
+            (
+                wallet
+                for wallet_name, wallet in self.wallets.items()
+                if wallet_name.lower() == name.lower()
+            ),
             None,
         )
 
@@ -45,21 +50,18 @@ class FakeRepo:
         return SimpleNamespace(id=1)
 
 
-class CashWithdrawalTest(unittest.IsolatedAsyncioTestCase):
+class TestCashWithdrawal:
     async def test_cash_withdrawal_is_transfer_to_cash_wallet(self):
         repo = FakeRepo()
         service = TransactionService(FakeLLM(), repo)
 
         result = await service.process_natural_language(
-            123, "Tarik tunai buat pegangan cash 500k"
+            123,
+            "Tarik tunai buat pegangan cash 500k",
         )
 
-        self.assertIn("🔄", result)
-        self.assertIn("BCA ➡️ Cash", result)
-        self.assertIn("Cash", repo.wallets)
-        self.assertEqual("transfer", repo.created_transaction["type"])
-        self.assertEqual(repo.wallets["Cash"].id, repo.created_transaction["target_wallet_id"])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert "🔄" in result
+        assert "BCA ➡️ Cash" in result
+        assert "Cash" in repo.wallets
+        assert repo.created_transaction["type"] == "transfer"
+        assert repo.created_transaction["target_wallet_id"] == repo.wallets["Cash"].id

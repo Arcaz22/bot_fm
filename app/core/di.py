@@ -3,22 +3,10 @@ from app.infrastructure.db.base import async_session
 from app.infrastructure.db.repositories.finance import FinanceRepo
 from app.application.services.debt_service import DebtService
 from app.application.usecases.debt import ManageDebt
+from app.application.services.receipt_service import ReceiptService
+from app.application.usecases.receipt import ProcessReceiptImage
+from app.infrastructure.llm.factory import create_llm_client
 
-async def resolve_manage_debt_usecase():
-    async with async_session() as session:
-        repo = FinanceRepo(session)
-        debt_service = DebtService(repo=repo)
-        return ManageDebt(debt_service=debt_service)
-
-async def resolve_process_receipt_usecase():
-    from app.application.services.receipt_service import ReceiptService
-    from app.application.usecases.receipt import ProcessReceiptImage
-    from app.infrastructure.llm.client import GeminiLLM
-    async with async_session() as session:
-        repo = FinanceRepo(session)
-        llm = GeminiLLM()
-        receipt_service = ReceiptService(llm=llm, repo=repo)
-        return ProcessReceiptImage(receipt_service=receipt_service)
 from functools import lru_cache
 from fastapi import Depends
 from redis.asyncio import Redis
@@ -34,7 +22,8 @@ from app.infrastructure.db.repositories.finance import FinanceRepo
 # --- CLIENTS & INFRA ---
 from app.infrastructure.telegram.client import TelegramClient
 from app.infrastructure.telegram.queue import TelegramUpdateQueue
-from app.infrastructure.llm.client import GeminiLLM
+from app.domain.llm.ports import LLMPort
+from app.infrastructure.llm.factory import create_llm_client
 
 # --- SERVICES & USECASES ---
 from app.application.services.transaction_service import TransactionService
@@ -53,7 +42,7 @@ def get_telegram_client():
 
 @lru_cache()
 def get_llm_client():
-    return GeminiLLM()
+    return create_llm_client()
 
 @lru_cache()
 def get_redis_client():
@@ -76,13 +65,13 @@ async def get_finance_repo(session: AsyncSession = Depends(get_db)):
 # 3. APPLICATION SERVICES (Logic Layer)
 # =========================================================
 async def get_transaction_service(
-    llm: GeminiLLM = Depends(get_llm_client),
+    llm: LLMPort = Depends(get_llm_client),
     finance_repo: FinanceRepo = Depends(get_finance_repo)
 ):
     return TransactionService(llm=llm, repo=finance_repo)
 
 async def get_receipt_service(
-    llm: GeminiLLM = Depends(get_llm_client),
+    llm: LLMPort = Depends(get_llm_client),
     finance_repo: FinanceRepo = Depends(get_finance_repo)
 ):
     return ReceiptService(llm=llm, repo=finance_repo)
@@ -91,6 +80,7 @@ async def get_debt_service(
     finance_repo: FinanceRepo = Depends(get_finance_repo)
 ):
     return DebtService(repo=finance_repo)
+
 
 # =========================================================
 # 4. USECASES (Main Entry Point)
@@ -105,6 +95,7 @@ async def get_handle_update(
         notifier=telegram_client,
         trans_service=trans_service
     )
+
 
 async def get_process_receipt_usecase(
     receipt_service: ReceiptService = Depends(get_receipt_service)
@@ -130,3 +121,16 @@ async def process_telegram_update_from_queue(update):
             trans_service=transaction_service,
         )
         await usecase.execute(update)
+
+async def resolve_manage_debt_usecase():
+    async with async_session() as session:
+        repo = FinanceRepo(session)
+        debt_service = DebtService(repo=repo)
+        return ManageDebt(debt_service=debt_service)
+
+async def resolve_process_receipt_usecase():
+    async with async_session() as session:
+        repo = FinanceRepo(session)
+        llm = create_llm_client()
+        receipt_service = ReceiptService(llm=llm, repo=repo)
+        return ProcessReceiptImage(receipt_service=receipt_service)

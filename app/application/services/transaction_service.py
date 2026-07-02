@@ -3,6 +3,7 @@ import re
 from app.domain.llm.ports import LLMPort
 from app.domain.finance.ports import FinanceRepoPort
 from app.domain.finance import rules
+from app.domain.finance import category_keywords
 from app.domain.finance.exceptions import FinanceError, InsufficientBalanceError
 from app.application.dtos.extraction import ExtractedTransaction
 
@@ -75,6 +76,21 @@ def _is_cash_withdrawal(text: str) -> bool:
     return bool(re.search(CASH_WITHDRAWAL_PATTERN, text, flags=re.IGNORECASE))
 
 
+# Keywords that signal the message is NOT a simple single-wallet expense.
+# Any hit here disqualifies the regex fast-path and forces the LLM call,
+# since transfer/income parsing needs judgment the regex isn't trusted with.
+_FAST_PATH_DISQUALIFIERS = (
+    "transfer", "kirim", "pindahin", "pindah saldo",  # transfer-like
+    "gaji", "dapat", "terima", "masuk", "bonus", "dividen", "cashback", "refund",  # income-like
+)
+
+
+def _is_simple_expense_candidate(text: str) -> bool:
+    """Conservative guard: only allow the fast path for unambiguous expenses."""
+    text_lower = text.lower()
+    return not any(keyword in text_lower for keyword in _FAST_PATH_DISQUALIFIERS)
+
+
 class TransactionService:
     def __init__(self, llm: LLMPort, repo: FinanceRepoPort):
         self.llm = llm
@@ -95,6 +111,28 @@ class TransactionService:
                     transaction_type="EXPENSE" if debt_action in {"LEND", "PAY"} else "INCOME",
                     debt_action=debt_action,
                     counterparty_name=counterparty_name
+                )
+            elif (
+                amount_hint
+                and not is_cash_withdrawal
+                and _is_simple_expense_candidate(text)
+                and (fast_category := category_keywords.guess_category(text))
+                and (fast_wallet := category_keywords.guess_wallet(text))
+            ):
+                # High-confidence simple expense (amount + category keyword +
+                # wallet keyword all matched) — skip the Gemini call entirely.
+                logger.info(
+                    f"Fast-path (no LLM call): amount={amount_hint}, "
+                    f"category={fast_category}, wallet={fast_wallet}"
+                )
+                data = ExtractedTransaction(
+                    amount=amount_hint,
+                    category=fast_category,
+                    wallet_name=fast_wallet,
+                    description=text[:50],
+                    transaction_type="EXPENSE",
+                    debt_action="NONE",
+                    counterparty_name=None,
                 )
             else:
                 raw_data = await self.llm.parse_transaction(text)
