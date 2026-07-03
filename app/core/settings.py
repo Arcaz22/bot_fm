@@ -18,9 +18,10 @@ class Settings(BaseSettings):
     # --- Database ---
     DATABASE_URL: str = Field(..., alias="DATABASE_URL")
 
-    # --- AI Quota & Whitelist ---
-    AI_FREE_QUOTA: int
-    AI_WHITELIST_USER_IDS: str | None = None
+    # --- Membership ---
+    # Kode plan yang otomatis di-assign ke user baru saat /start.
+    # Upgrade ke plan berbayar dilakukan lewat dashboard, bukan lewat bot ini.
+    DEFAULT_FREE_PLAN_CODE: str
 
     # --- Redis & Queue ---
     REDIS_URL: str
@@ -43,21 +44,6 @@ class Settings(BaseSettings):
         elif url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         return url
-
-    @property
-    def ai_whitelist_ids(self) -> set[int]:
-        if not self.AI_WHITELIST_USER_IDS:
-            return set()
-        ids: set[int] = set()
-        for part in self.AI_WHITELIST_USER_IDS.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            try:
-                ids.add(int(part))
-            except ValueError:
-                continue
-        return ids
 
     model_config = SettingsConfigDict(
         env_file=".env",

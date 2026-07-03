@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import date, timedelta
 from typing import Set
 
 from app.application.services.transaction_service import TransactionService
@@ -7,6 +8,7 @@ from app.presentation.schemas.telegram import Update, Message
 from app.domain.telegram.entities import TelegramUser
 from app.domain.telegram.rules import ensure_active
 from app.domain.telegram.ports import TelegramUserRepo, TelegramNotifier
+from app.domain.membership.ports import MembershipRepoPort
 from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -158,44 +160,75 @@ class HandleTelegramUpdate:
         self,
         user_repo: TelegramUserRepo,
         notifier: TelegramNotifier,
-        trans_service: TransactionService
+        trans_service: TransactionService,
+        membership_repo: MembershipRepoPort
     ):
         self.user_repo = user_repo
         self.notifier = notifier
         self.trans_service = trans_service
+        self.membership_repo = membership_repo
 
-    async def _check_ai_quota(self, user: TelegramUser) -> bool:
-        """Cek kuota penggunaan AI untuk user non-whitelist."""
-        if user.id in settings.ai_whitelist_ids:
-            return True
+    def _resolve_usage_period(self, limit_period: str | None) -> tuple[date, date]:
+        """Terjemahkan limit_period plan_feature jadi rentang tanggal periode
+        berjalan, dipakai sebagai key baris MbrUsageCounter."""
+        today = date.today()
+        if limit_period == "daily":
+            return today, today
+        if limit_period == "monthly":
+            start = today.replace(day=1)
+            next_month = (start.month % 12) + 1
+            next_month_year = start.year + (1 if start.month == 12 else 0)
+            end = start.replace(year=next_month_year, month=next_month, day=1) - timedelta(days=1)
+            return start, end
+        # "lifetime" atau None: satu periode tetap yang tidak pernah berganti.
+        return date(2000, 1, 1), date(2999, 12, 31)
 
-        temp = user.temp_data or {}
-        try:
-            used = int(temp.get("ai_usage", 0) or 0)
-        except (TypeError, ValueError):
-            used = 0
+    async def _check_feature_quota(self, user: TelegramUser, feature_key: str) -> bool:
+        """Cek limit fitur (mis. ai_parse_transaction, receipt_scan)
+        berdasarkan plan aktif user di membership. True kalau boleh lanjut,
+        dan otomatis increment usage-nya."""
+        subscription = await self.membership_repo.get_active_subscription(user.id)
+        if not subscription:
+            # Pengaman: harusnya tidak pernah kejadian karena /start sudah
+            # auto-assign free plan, tapi kalau ada data lama/race condition,
+            # assign sekarang juga daripada memblokir user tanpa plan sama sekali.
+            subscription = await self.membership_repo.ensure_free_subscription(user.id)
 
-        quota = settings.AI_FREE_QUOTA
+        feature = await self.membership_repo.get_plan_feature(subscription.plan_id, feature_key)
+        if not feature or not feature.is_enabled:
+            await self.notifier.send_message(
+                user.id,
+                f"⚠️ Fitur ini tidak tersedia di plan Anda saat ini.\n\nUpgrade di {DASHBOARD_URL}",
+            )
+            return False
 
-        if quota and quota > 0 and used >= quota:
+        if feature.limit_value is None:
+            return True  # unlimited di plan ini
+
+        period_start, period_end = self._resolve_usage_period(feature.limit_period)
+        used = await self.membership_repo.get_usage(user.id, feature_key, period_start, period_end)
+
+        if used >= feature.limit_value:
             await self.notifier.send_message(
                 user.id,
                 (
-                    "⚠️ Jatah penggunaan AI Anda sudah habis.\n\n"
-                    "Hubungi admin jika ingin menambah limit atau dimasukkan ke whitelist."
+                    f"⚠️ Jatah pemakaian fitur ini sudah habis untuk periode ini "
+                    f"({used}/{feature.limit_value}).\n\n"
+                    f"Upgrade plan Anda di {DASHBOARD_URL}"
                 ),
             )
             return False
 
-        temp["ai_usage"] = used + 1
-        user.temp_data = temp
-        await self.user_repo.upsert(user)
+        await self.membership_repo.increment_usage(user.id, feature_key, period_start, period_end)
         return True
 
     async def _handle_photo(self, msg, user: TelegramUser, chat_id: int) -> None:
         """Handle pesan foto — proses sebagai struk belanja."""
         from app.application.dtos.extraction import ReceiptContext
         from app.core.di import resolve_process_receipt_usecase
+
+        if not await self._check_feature_quota(user, "receipt_scan"):
+            return
 
         await self.notifier.send_message(chat_id, "📸 Sedang membaca struk, tunggu sebentar...")
 
@@ -288,6 +321,9 @@ class HandleTelegramUpdate:
                 is_active=True
             )
             await self.user_repo.upsert(user)
+            # User baru otomatis masuk plan free. Upgrade dilakukan lewat
+            # dashboard (payment flow tidak ditangani bot ini sama sekali).
+            await self.membership_repo.ensure_free_subscription(chat_id)
 
         # --- 2. Active State Check ---
         try:
@@ -364,7 +400,7 @@ class HandleTelegramUpdate:
 
             # Default: Transaction via LLM
             logger.info(f"Routing to LLM TRANSACTION handler for user {chat_id}")
-            if not await self._check_ai_quota(user):
+            if not await self._check_feature_quota(user, "ai_parse_transaction"):
                 return
 
             response_text = await self.trans_service.process_natural_language(chat_id, text)
@@ -373,7 +409,7 @@ class HandleTelegramUpdate:
 
         # --- 5. Fallback: User tidak dalam state IDLE ---
         logger.info(f"User {chat_id} in state '{user.current_state}', forwarding to LLM")
-        if not await self._check_ai_quota(user):
+        if not await self._check_feature_quota(user, "ai_parse_transaction"):
             return
 
         response_text = await self.trans_service.process_natural_language(chat_id, text)

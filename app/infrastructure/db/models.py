@@ -34,6 +34,16 @@ class SysTelegramUser(Base):
     )
     debts: Mapped[List["TrsDebt"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
 
+    subscriptions: Mapped[List["MbrSubscription"]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
+    usage_counters: Mapped[List["MbrUsageCounter"]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
+    payments: Mapped[List["MbrPayment"]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
+
     def __repr__(self):
         return f"<User {self.id} - {self.first_name}>"
 
@@ -201,3 +211,166 @@ class TrsDebt(Base):
 
     def __repr__(self):
         return f"<Debt {self.id}: owner={self.owner_telegram_user_id} {self.direction} {self.counterparty_id} {self.amount} ({self.status})>"
+
+
+# =====================================================================
+# Membership (plan, subscription, usage quota, payment)
+#
+# Sengaja TIDAK ada tabel "user" terpisah di sini. Dulu (waktu rencananya
+# jadi microservice terpisah dengan DB sendiri) memang perlu identity
+# table sendiri karena tidak bisa FK lintas database. Sekarang satu
+# database dengan FM, jadi semua tabel membership FK langsung ke
+# SysTelegramUser.id supaya cuma ada satu sumber kebenaran untuk "siapa
+# user ini" — tidak ada risiko drift antara dua tabel user.
+# =====================================================================
+
+class MbrPlan(Base):
+    """Daftar tier: free, tier_1, tier_2, dst."""
+
+    __tablename__ = "mbr_plan"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    # code: free, tier_1, tier_2
+
+    name: Mapped[str] = mapped_column(String(100))
+    price: Mapped[Numeric] = mapped_column(Numeric(18, 2), default=0)
+
+    billing_period: Mapped[str] = mapped_column(String(20), default="free")
+    # billing_period: monthly, yearly, lifetime, free
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    features: Mapped[List["MbrPlanFeature"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan"
+    )
+    subscriptions: Mapped[List["MbrSubscription"]] = relationship(back_populates="plan")
+    payments: Mapped[List["MbrPayment"]] = relationship(back_populates="plan")
+
+    def __repr__(self):
+        return f"<MbrPlan {self.code}>"
+
+
+class MbrPlanFeature(Base):
+    """
+    Fitur dan limit tiap plan. Contoh feature_key: receipt_scan,
+    ai_parse_transaction, dashboard_export.
+    """
+
+    __tablename__ = "mbr_plan_feature"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "feature_key", name="uq_plan_feature"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    plan_id: Mapped[int] = mapped_column(ForeignKey("mbr_plan.id"), index=True)
+    feature_key: Mapped[str] = mapped_column(String(100), index=True)
+
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    limit_value: Mapped[Optional[int]] = mapped_column(Integer, default=None)
+    # limit_value: null berarti unlimited
+
+    limit_period: Mapped[Optional[str]] = mapped_column(String(20), default=None)
+    # limit_period: daily, monthly, lifetime, atau null
+
+    plan: Mapped["MbrPlan"] = relationship(back_populates="features")
+
+    def __repr__(self):
+        return f"<MbrPlanFeature {self.feature_key} @ plan_id={self.plan_id}>"
+
+
+class MbrSubscription(Base):
+    """Subscription user terhadap satu plan, dengan periode aktif."""
+
+    __tablename__ = "mbr_subscription"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    owner_telegram_user_id: Mapped[int] = mapped_column(ForeignKey("sys_telegram_user.id"), index=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("mbr_plan.id"), index=True)
+
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    # status: active, trialing, expired, cancelled, pending_payment
+
+    started_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    owner: Mapped["SysTelegramUser"] = relationship(back_populates="subscriptions")
+    plan: Mapped["MbrPlan"] = relationship(back_populates="subscriptions")
+
+    def __repr__(self):
+        return f"<MbrSubscription owner={self.owner_telegram_user_id} plan={self.plan_id} status={self.status}>"
+
+
+class MbrUsageCounter(Base):
+    """
+    Pemakaian fitur berkuota per periode. Unique constraint memastikan
+    satu baris per kombinasi owner + fitur + periode, supaya bisa
+    increment dengan aman tanpa duplikasi.
+    """
+
+    __tablename__ = "mbr_usage_counter"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_telegram_user_id", "feature_key", "period_start", "period_end",
+            name="uq_usage_counter_period",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    owner_telegram_user_id: Mapped[int] = mapped_column(ForeignKey("sys_telegram_user.id"), index=True)
+    feature_key: Mapped[str] = mapped_column(String(100), index=True)
+
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+
+    used: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    owner: Mapped["SysTelegramUser"] = relationship(back_populates="usage_counters")
+
+    def __repr__(self):
+        return f"<MbrUsageCounter {self.feature_key} owner={self.owner_telegram_user_id} used={self.used}>"
+
+
+class MbrPayment(Base):
+    """Pembayaran/invoice dari payment provider (manual, midtrans, xendit, dst)."""
+
+    __tablename__ = "mbr_payment"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    owner_telegram_user_id: Mapped[int] = mapped_column(ForeignKey("sys_telegram_user.id"), index=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("mbr_plan.id"), index=True)
+
+    provider: Mapped[str] = mapped_column(String(50))
+    # provider: manual, midtrans, xendit
+
+    provider_reference: Mapped[Optional[str]] = mapped_column(
+        String(255), unique=True, index=True
+    )
+    # unique supaya webhook yang sama tidak diproses dua kali (idempotent)
+
+    amount: Mapped[Numeric] = mapped_column(Numeric(18, 2))
+
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    # status: pending, paid, failed, expired, refunded
+
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    owner: Mapped["SysTelegramUser"] = relationship(back_populates="payments")
+    plan: Mapped["MbrPlan"] = relationship(back_populates="payments")
+
+    def __repr__(self):
+        return f"<MbrPayment {self.id} owner={self.owner_telegram_user_id} status={self.status}>"
