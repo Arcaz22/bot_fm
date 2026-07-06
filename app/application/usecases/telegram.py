@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import date, timedelta
+from app.domain.membership.rules import resolve_usage_period
 from typing import Set
 
 from app.application.services.transaction_service import TransactionService
@@ -168,21 +168,6 @@ class HandleTelegramUpdate:
         self.trans_service = trans_service
         self.membership_repo = membership_repo
 
-    def _resolve_usage_period(self, limit_period: str | None) -> tuple[date, date]:
-        """Terjemahkan limit_period plan_feature jadi rentang tanggal periode
-        berjalan, dipakai sebagai key baris MbrUsageCounter."""
-        today = date.today()
-        if limit_period == "daily":
-            return today, today
-        if limit_period == "monthly":
-            start = today.replace(day=1)
-            next_month = (start.month % 12) + 1
-            next_month_year = start.year + (1 if start.month == 12 else 0)
-            end = start.replace(year=next_month_year, month=next_month, day=1) - timedelta(days=1)
-            return start, end
-        # "lifetime" atau None: satu periode tetap yang tidak pernah berganti.
-        return date(2000, 1, 1), date(2999, 12, 31)
-
     async def _check_feature_quota(self, user: TelegramUser, feature_key: str) -> bool:
         """Cek limit fitur (mis. ai_parse_transaction, receipt_scan)
         berdasarkan plan aktif user di membership. True kalau boleh lanjut,
@@ -205,7 +190,7 @@ class HandleTelegramUpdate:
         if feature.limit_value is None:
             return True  # unlimited di plan ini
 
-        period_start, period_end = self._resolve_usage_period(feature.limit_period)
+        period_start, period_end = resolve_usage_period(feature.limit_period)
         used = await self.membership_repo.get_usage(user.id, feature_key, period_start, period_end)
 
         if used >= feature.limit_value:

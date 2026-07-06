@@ -31,7 +31,7 @@ class ExtractedReceipt(BaseModel):
 
 
 class ReceiptContext(BaseModel):
-    wallet_name: str = "BCA"
+    wallet_name: Optional[str] = None
     default_category: Optional[str] = None
     notes: Optional[str] = None
     selected_items: Optional[List[int]] = None

@@ -145,11 +145,40 @@ class FakeFinanceRepo:
         return SimpleNamespace(status="paid", amount=0)
 
 
+class FakeMembershipRepo:
+    """In-memory membership repo with configurable feature usage."""
+
+    def __init__(self, used: int = 0, limit_value: int | None = None):
+        self.used = used
+        self.limit_value = limit_value
+        self.subscription = SimpleNamespace(plan_id=1)
+
+    async def get_active_subscription(self, telegram_user_id: int):
+        return self.subscription
+
+    async def ensure_free_subscription(self, telegram_user_id: int):
+        return self.subscription
+
+    async def get_plan_feature(self, plan_id: int, feature_key: str):
+        return SimpleNamespace(
+            is_enabled=True,
+            limit_value=self.limit_value,
+            limit_period="monthly",
+        )
+
+    async def get_usage(self, telegram_user_id, feature_key, period_start, period_end):
+        return self.used
+
+    async def increment_usage(self, telegram_user_id, feature_key, period_start, period_end):
+        self.used += 1
+
+
 def _make_usecase(
     existing_user: TelegramUser | None = None,
     llm=None,
     notifier: FakeNotifier | None = None,
     finance_repo: FakeFinanceRepo | None = None,
+    membership_repo: FakeMembershipRepo | None = None,
 ) -> tuple[HandleTelegramUpdate, FakeNotifier, FakeUserRepo]:
     repo = FakeUserRepo(existing_user)
     notif = notifier or FakeNotifier()
@@ -161,6 +190,7 @@ def _make_usecase(
         user_repo=repo,
         notifier=notif,
         trans_service=service,
+        membership_repo=membership_repo or FakeMembershipRepo(),
     )
 
     return usecase, notif, repo
@@ -490,14 +520,14 @@ class TestContactHandling:
 
 class TestAIQuota:
     async def _run_with_quota(self, used: int, quota: int):
-        user = _make_user(temp_data={"ai_usage": used})
-        usecase, notif, _ = _make_usecase(existing_user=user)
+        user = _make_user()
+        membership_repo = FakeMembershipRepo(used=used, limit_value=quota)
+        usecase, notif, _ = _make_usecase(
+            existing_user=user,
+            membership_repo=membership_repo,
+        )
 
-        with patch("app.application.usecases.telegram.settings") as mock_settings:
-            mock_settings.ai_whitelist_ids = set()
-            mock_settings.AI_FREE_QUOTA = quota
-
-            await usecase.execute(_make_update(text="makan 20rb"))
+        await usecase.execute(_make_update(text="makan 20rb"))
 
         return notif.sent
 
@@ -511,15 +541,15 @@ class TestAIQuota:
 
         assert not any("Jatah" in message for _, message in sent)
 
-    async def test_whitelisted_user_bypasses_quota(self):
-        user = _make_user(temp_data={"ai_usage": 9999})
-        usecase, notif, _ = _make_usecase(existing_user=user)
+    async def test_unlimited_plan_bypasses_usage_limit(self):
+        user = _make_user()
+        membership_repo = FakeMembershipRepo(used=9999, limit_value=None)
+        usecase, notif, _ = _make_usecase(
+            existing_user=user,
+            membership_repo=membership_repo,
+        )
 
-        with patch("app.application.usecases.telegram.settings") as mock_settings:
-            mock_settings.ai_whitelist_ids = {CHAT_ID}
-            mock_settings.AI_FREE_QUOTA = 5
-
-            await usecase.execute(_make_update(text="makan 20rb"))
+        await usecase.execute(_make_update(text="makan 20rb"))
 
         assert not any("Jatah" in message for _, message in notif.sent)
 

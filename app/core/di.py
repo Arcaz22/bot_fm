@@ -18,6 +18,7 @@ from app.infrastructure.db.base import get_db
 # --- REPOSITORIES ---
 from app.infrastructure.db.repositories.telegram import SqlTelegramUserRepo
 from app.infrastructure.db.repositories.finance import FinanceRepo
+from app.infrastructure.db.repositories.membership import SqlMembershipRepo
 
 # --- CLIENTS & INFRA ---
 from app.infrastructure.telegram.client import TelegramClient
@@ -61,6 +62,9 @@ async def get_user_repo(session: AsyncSession = Depends(get_db)):
 async def get_finance_repo(session: AsyncSession = Depends(get_db)):
     return FinanceRepo(session)
 
+async def get_membership_repo(session: AsyncSession = Depends(get_db)):
+    return SqlMembershipRepo(session)
+
 # =========================================================
 # 3. APPLICATION SERVICES (Logic Layer)
 # =========================================================
@@ -88,12 +92,14 @@ async def get_debt_service(
 async def get_handle_update(
     user_repo: SqlTelegramUserRepo = Depends(get_user_repo),
     telegram_client: TelegramClient = Depends(get_telegram_client),
-    trans_service: TransactionService = Depends(get_transaction_service)
+    trans_service: TransactionService = Depends(get_transaction_service),
+    membership_repo: SqlMembershipRepo = Depends(get_membership_repo),
 ):
     return HandleTelegramUpdate(
         user_repo=user_repo,
         notifier=telegram_client,
-        trans_service=trans_service
+        trans_service=trans_service,
+        membership_repo=membership_repo,
     )
 
 
@@ -115,10 +121,12 @@ async def process_telegram_update_from_queue(update):
             llm=get_llm_client(),
             repo=finance_repo,
         )
+        membership_repo = SqlMembershipRepo(session)
         usecase = HandleTelegramUpdate(
             user_repo=user_repo,
             notifier=get_telegram_client(),
             trans_service=transaction_service,
+            membership_repo=membership_repo,
         )
         await usecase.execute(update)
 

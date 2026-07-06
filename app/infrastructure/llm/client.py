@@ -52,15 +52,6 @@ def _usage_details(response: Any) -> Optional[Dict[str, int]]:
     return normalized or None
 
 
-def shutdown_langfuse_client() -> None:
-    """Flush pending observations when the application process stops."""
-    if _get_langfuse_client.cache_info().currsize == 0:
-        return
-
-    client = _get_langfuse_client()
-    if client is not None:
-        client.shutdown()
-
 def _compress_receipt_image(
     image_bytes: bytes,
     max_side: int = 1024,
@@ -98,7 +89,17 @@ def _compress_receipt_image(
         # original bytes rather than breaking the whole receipt flow.
         logger.exception("Gagal kompres gambar nota, memakai gambar asli")
         return image_bytes
-    
+
+
+def shutdown_langfuse_client() -> None:
+    """Flush pending observations when the application process stops."""
+    if _get_langfuse_client.cache_info().currsize == 0:
+        return
+
+    client = _get_langfuse_client()
+    if client is not None:
+        client.shutdown()
+
 
 class GeminiLLM(LLMPort):
     def __init__(self, model_name: str = "gemini-2.5-flash"):
@@ -395,6 +396,66 @@ class GeminiLLM(LLMPort):
                 "total": 0,
                 "items": []
             }
+            return self._result_with_usage(data, usage, include_usage)
+
+    async def interpret_receipt_selection(
+        self,
+        items: list,
+        caption: str,
+        include_usage: bool = False,
+    ) -> Dict[str, Any]:
+        """Panggilan text-only (bukan vision) — hanya dipakai untuk kasus
+        caption yang tidak bisa diselesaikan dengan regex/substring match
+        biasa. Input items sudah dalam bentuk list-of-dict hasil ekstraksi
+        vision sebelumnya, jadi ini murah (tidak perlu kirim ulang gambar)."""
+        items_json = json.dumps(items, ensure_ascii=False)
+
+        system_prompt = f"""
+        Kamu diberi daftar item dari sebuah struk belanja (JSON, index mulai dari 0)
+        dan catatan bebas dari user tentang transaksi ini. Tugas kamu:
+
+        1. wallet_name (string|null): tentukan metode pembayaran/wallet KALAU
+           disebutkan di catatan (contoh: "pake BCA", "bayar pakai Gopay").
+           Kalau tidak disebutkan sama sekali, null.
+        2. selected_item_indices (array of int|null): index item mana saja
+           (dari array di bawah) yang benar-benar relevan/dibeli berdasarkan
+           catatan user. Kalau catatan tidak membatasi item apapun, null
+           (artinya semua item termasuk).
+
+        Data items:
+        {items_json}
+
+        Catatan user: "{caption}"
+
+        Return HANYA JSON, tanpa markdown, format:
+        {{"wallet_name": string|null, "selected_item_indices": array|null}}
+        """
+
+        usage: Dict[str, int] = {}
+        try:
+            with self._observe_generation(
+                name="gemini.interpret_receipt_selection",
+                input={"system_instruction": system_prompt.strip(), "items": items, "caption": caption},
+                model_parameters=self.generation_parameters,
+                metadata={"operation": "interpret_receipt_selection"},
+            ) as generation:
+                response = await self.model.generate_content_async(system_prompt)
+                usage = self._record_response(generation, response)
+
+            raw_json = response.text.strip()
+            parsed = json.loads(raw_json)
+
+            parsed.setdefault("wallet_name", None)
+            parsed.setdefault("selected_item_indices", None)
+
+            return self._result_with_usage(parsed, usage, include_usage)
+
+        except Exception as e:
+            # Fail-safe: kalau interpretasi gagal (JSON rusak, network error,
+            # dll), JANGAN diam-diam buang item — anggap tidak ada
+            # pembatasan sama sekali, biar semua item tetap tercatat.
+            logger.error(f"Gagal interpret_receipt_selection: {type(e).__name__} - {e}")
+            data = {"wallet_name": None, "selected_item_indices": None, "error": str(e)}
             return self._result_with_usage(data, usage, include_usage)
 
     async def chat_completion_with_usage(

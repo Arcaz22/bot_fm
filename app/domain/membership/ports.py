@@ -22,6 +22,15 @@ class MembershipRepoPort(Protocol):
     async def get_plan_feature(self, plan_id: int, feature_key: str) -> Optional[MbrPlanFeature]:
         ...
 
+    async def list_plan_features(self, plan_id: int) -> list:
+        ...
+
+    async def list_plans_with_features(self) -> list:
+        ...
+
+    async def list_payments(self, telegram_user_id: int, limit: int = 50) -> list:
+        ...
+
     async def get_usage(
         self, telegram_user_id: int, feature_key: str, period_start: date, period_end: date
     ) -> int:

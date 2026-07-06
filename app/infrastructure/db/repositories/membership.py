@@ -1,12 +1,19 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.settings import settings
-from app.infrastructure.db.models import MbrPlan, MbrPlanFeature, MbrSubscription, MbrUsageCounter
+from app.infrastructure.db.models import (
+    MbrPayment,
+    MbrPlan,
+    MbrPlanFeature,
+    MbrSubscription,
+    MbrUsageCounter,
+)
 
 
 class SqlMembershipRepo:
@@ -16,6 +23,7 @@ class SqlMembershipRepo:
     async def get_active_subscription(self, telegram_user_id: int) -> Optional[MbrSubscription]:
         stmt = (
             select(MbrSubscription)
+            .options(selectinload(MbrSubscription.plan))
             .where(
                 MbrSubscription.owner_telegram_user_id == telegram_user_id,
                 MbrSubscription.status == "active",
@@ -53,11 +61,12 @@ class SqlMembershipRepo:
             owner_telegram_user_id=telegram_user_id,
             plan_id=free_plan.id,
             status="active",
-            expires_at=None,
+            expires_at=None,  # free plan tidak pernah kedaluwarsa
         )
         self.session.add(subscription)
         await self.session.commit()
         await self.session.refresh(subscription)
+        subscription.plan = free_plan  # sudah ada di scope, hindari lazy-load async
         return subscription
 
     async def _get_plan_by_code(self, code: str) -> Optional[MbrPlan]:
@@ -71,6 +80,32 @@ class SqlMembershipRepo:
         )
         result = await self.session.execute(stmt)
         return result.scalars().first()
+
+    async def list_plan_features(self, plan_id: int) -> List[MbrPlanFeature]:
+        stmt = select(MbrPlanFeature).where(MbrPlanFeature.plan_id == plan_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_plans_with_features(self) -> List[MbrPlan]:
+        stmt = (
+            select(MbrPlan)
+            .where(MbrPlan.is_active == True)  # noqa: E712
+            .options(selectinload(MbrPlan.features))
+            .order_by(MbrPlan.price)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_payments(self, telegram_user_id: int, limit: int = 50) -> List[MbrPayment]:
+        stmt = (
+            select(MbrPayment)
+            .options(selectinload(MbrPayment.plan))
+            .where(MbrPayment.owner_telegram_user_id == telegram_user_id)
+            .order_by(MbrPayment.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
     async def get_usage(
         self, telegram_user_id: int, feature_key: str, period_start: date, period_end: date
