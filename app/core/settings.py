@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # Upgrade ke plan berbayar dilakukan lewat dashboard, bukan lewat bot ini.
     DEFAULT_FREE_PLAN_CODE: str
 
+    # --- Midtrans ---
+    MIDTRANS_SERVER_KEY: str
+    MIDTRANS_CLIENT_KEY: str
+    MIDTRANS_IS_PRODUCTION: bool = False
+
     # --- Redis & Queue ---
     REDIS_URL: str
     TELEGRAM_QUEUE_WORKERS: int

@@ -16,33 +16,63 @@ from sqlalchemy import select
 from app.infrastructure.db.base import async_session
 from app.infrastructure.db.models import MbrPlan, MbrPlanFeature
 
-# --- Definisi plan ---
+# --- Rename code plan lama -> baru (dijalankan sekali, in-place) ---
+# Supaya plan_id yang sudah dipakai di MbrSubscription/MbrPayment lama
+# tidak jadi yatim piatu — kita rename baris yang ada, bukan insert baru.
+RENAME_MAP = {
+    "tier_1": "pro",
+    "tier_2": "premium",
+}
+
+# --- Definisi plan (harga reguler sesuai dokumen strategi) ---
 PLANS = [
-    {"code": "free", "name": "Free", "price": 0, "billing_period": "free"},
-    {"code": "tier_1", "name": "Tier 1", "price": 15000, "billing_period": "monthly"},
-    {"code": "tier_2", "name": "Tier 2", "price": 35000, "billing_period": "monthly"},
+    {"code": "free", "name": "Starter", "price": 0, "billing_period": "free"},
+    {"code": "pro", "name": "Pro", "price": 19000, "billing_period": "monthly"},
+    {"code": "premium", "name": "Premium", "price": 39000, "billing_period": "monthly"},
 ]
 
 # --- Definisi limit fitur per plan code ---
 # limit_value=None berarti unlimited.
+# limit_period sekarang "monthly" (sebelumnya "daily") sesuai dokumen strategi.
 PLAN_FEATURES = {
     "free": [
-        {"feature_key": "ai_parse_transaction", "limit_value": 10, "limit_period": "daily"},
-        {"feature_key": "receipt_scan", "limit_value": 5, "limit_period": "daily"},
+        {"feature_key": "ai_parse_transaction", "limit_value": 25, "limit_period": "monthly"},
+        {"feature_key": "receipt_scan", "limit_value": 5, "limit_period": "monthly"},
     ],
-    "tier_1": [
-        {"feature_key": "ai_parse_transaction", "limit_value": 100, "limit_period": "daily"},
-        {"feature_key": "receipt_scan", "limit_value": 50, "limit_period": "daily"},
+    "pro": [
+        {"feature_key": "ai_parse_transaction", "limit_value": 150, "limit_period": "monthly"},
+        {"feature_key": "receipt_scan", "limit_value": 50, "limit_period": "monthly"},
     ],
-    "tier_2": [
+    "premium": [
         {"feature_key": "ai_parse_transaction", "limit_value": None, "limit_period": None},
         {"feature_key": "receipt_scan", "limit_value": None, "limit_period": None},
     ],
 }
 
 
+async def _rename_existing_codes(session):
+    """Rename in-place plan code lama -> baru, kalau baris lama masih ada
+    dan baris baru belum ada. Aman dijalankan berkali-kali."""
+    for old_code, new_code in RENAME_MAP.items():
+        result = await session.execute(select(MbrPlan).where(MbrPlan.code == old_code))
+        old_plan = result.scalars().first()
+        if not old_plan:
+            continue  # sudah pernah di-rename sebelumnya, atau memang belum ada
+
+        result = await session.execute(select(MbrPlan).where(MbrPlan.code == new_code))
+        if result.scalars().first():
+            continue  # baris baru sudah ada duluan (kondisi tidak wajar, skip demi aman)
+
+        print(f"Rename plan code: {old_code} -> {new_code} (plan_id={old_plan.id} tetap sama)")
+        old_plan.code = new_code
+
+    await session.flush()
+
+
 async def seed_plans():
     async with async_session() as session:
+        await _rename_existing_codes(session)
+
         code_to_plan: dict[str, MbrPlan] = {}
 
         for plan_data in PLANS:

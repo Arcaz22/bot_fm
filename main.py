@@ -19,6 +19,7 @@ from app.interfaces.http.routers.debt import router as debt_router
 from app.interfaces.http.routers.dashboard import router as dashboard_router
 from app.interfaces.http.routers.membership import router as membership_router
 from app.interfaces.http.routers.langfuse import router as langfuse_router
+from app.interfaces.http.routers.payment import router as payment_router
 
 from app.core.logging import setup_logging
 
@@ -72,6 +73,7 @@ app.include_router(debt_router)
 app.include_router(dashboard_router)
 app.include_router(membership_router)
 app.include_router(langfuse_router)
+app.include_router(payment_router)
 
 @app.get("/")
 async def root():

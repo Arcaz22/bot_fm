@@ -30,6 +30,7 @@ from app.infrastructure.llm.factory import create_llm_client
 from app.application.services.transaction_service import TransactionService
 from app.application.services.receipt_service import ReceiptService
 from app.application.services.debt_service import DebtService
+from app.application.services.payment_service import PaymentService
 from app.application.usecases.telegram import HandleTelegramUpdate
 from app.application.usecases.receipt import ProcessReceiptImage
 from app.application.usecases.debt import ManageDebt
@@ -64,6 +65,9 @@ async def get_finance_repo(session: AsyncSession = Depends(get_db)):
 
 async def get_membership_repo(session: AsyncSession = Depends(get_db)):
     return SqlMembershipRepo(session)
+
+async def get_payment_service(session: AsyncSession = Depends(get_db)):
+    return PaymentService(session)
 
 # =========================================================
 # 3. APPLICATION SERVICES (Logic Layer)
