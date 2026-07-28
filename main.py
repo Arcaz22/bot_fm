@@ -79,6 +79,12 @@ app.include_router(payment_router)
 async def root():
     return {"message": "Welcome to FINANCIAL MANAGEMENT API"}
 
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "finance-bot"}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=settings.APP_PORT)
