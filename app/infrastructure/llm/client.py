@@ -11,6 +11,11 @@ from langfuse import Langfuse
 from PIL import Image
 
 from app.core.settings import settings
+from app.domain.finance.category_keywords import (
+    EXPENSE_CATEGORIES,
+    INCOME_CATEGORIES,
+    normalize_category,
+)
 from app.domain.llm.ports import LLMPort
 
 logger = logging.getLogger(__name__)
@@ -178,17 +183,24 @@ class GeminiLLM(LLMPort):
         text: str,
         include_usage: bool = False,
     ) -> Dict[str, Any]:
-        system_prompt = """
+        system_prompt = f"""
         Ekstrak detail transaksi dari teks bahasa Indonesia. Return JSON dengan field:
 
         - amount (number): Nominal dalam angka (e.g. 25000, bukan "25rb")
-        - category (string): Kategori singkat (Food, Transport, Shopping, Loan, dll)
+        - category (string): Kategori sederhana, bukan kategori spesifik
         - wallet_name (string): Wallet sumber (default: "BCA")
         - target_wallet_name (string|null): Wallet tujuan (hanya untuk TRANSFER)
         - description (string): Deskripsi singkat transaksi
         - transaction_type (string): "EXPENSE", "INCOME", atau "TRANSFER"
         - debt_action (string): "NONE", "BORROW", "LEND", atau "PAY"
         - counterparty_name (string|null): Nama pihak lain (untuk hutang/piutang)
+
+        Aturan kategori:
+        - Untuk EXPENSE, category wajib salah satu dari: {", ".join(EXPENSE_CATEGORIES)}
+        - Untuk INCOME, category wajib salah satu dari: {", ".join(INCOME_CATEGORIES)}
+        - Jangan membuat category baru atau terlalu spesifik.
+        - Jika tidak cocok, pakai "Other".
+        - Liburan/travel/wisata masuk "Other", bukan category baru.
 
         Aturan Debt:
         - "Pinjam dari X" / "Minjem ke X" → BORROW (user hutang, INCOME)
@@ -248,8 +260,12 @@ class GeminiLLM(LLMPort):
             parsed.setdefault("target_wallet_name", None)
             parsed.setdefault("debt_action", "NONE")
             parsed.setdefault("counterparty_name", None)
-            parsed.setdefault("category", "Lain-lain")
+            parsed.setdefault("category", "Other")
             parsed.setdefault("description", text[:50])
+            parsed["category"] = normalize_category(
+                parsed.get("category"),
+                parsed.get("transaction_type"),
+            )
 
             logger.info(f"Transaction parsed successfully: {parsed.get('transaction_type')}")
             return self._result_with_usage(parsed, usage, include_usage)

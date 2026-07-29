@@ -12,6 +12,8 @@ COPY . .
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+ENV APP_PORT=8000
+
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${APP_PORT:-8000}"]

@@ -169,6 +169,11 @@ class TransactionService:
             if not getattr(data, "wallet_name", None):
                 data.wallet_name = "BCA"
 
+            data.category = category_keywords.normalize_category(
+                data.category,
+                data.transaction_type,
+            )
+
             try:
                 tl = text.lower()
                 if getattr(data, "debt_action", "NONE") == "NONE":
@@ -182,6 +187,10 @@ class TransactionService:
                     data.counterparty_name = counterparty_name
                 if data.debt_action == "PAY":
                     data.transaction_type = "EXPENSE"
+                    data.category = category_keywords.normalize_category(
+                        data.category,
+                        data.transaction_type,
+                    )
             except Exception:
                 pass
 

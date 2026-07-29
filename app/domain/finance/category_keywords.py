@@ -7,6 +7,30 @@ back to the LLM. Keep this list to high-confidence, unambiguous keywords;
 resist the urge to make it "smart", that's what the LLM fallback is for.
 """
 
+EXPENSE_CATEGORIES: tuple[str, ...] = (
+    "Food",
+    "Transport",
+    "Shopping",
+    "Bills",
+    "Health",
+    "Entertainment",
+    "Education",
+    "Other",
+)
+
+INCOME_CATEGORIES: tuple[str, ...] = (
+    "Salary",
+    "Bonus",
+    "Investment",
+    "Refund",
+    "Other",
+)
+
+TRANSFER_CATEGORIES: tuple[str, ...] = (
+    "Transfer",
+    "Cash Withdrawal",
+)
+
 # category -> keywords that strongly imply that category (lowercase)
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Food": [
@@ -30,6 +54,59 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Entertainment": [
         "nonton", "bioskop", "netflix", "spotify", "game",
     ],
+    "Education": [
+        "sekolah", "kuliah", "kursus", "buku", "kelas",
+    ],
+}
+
+CATEGORY_ALIASES: dict[str, str] = {
+    "food": "Food",
+    "makanan": "Food",
+    "minuman": "Food",
+    "restaurant": "Food",
+    "restoran": "Food",
+    "coffee": "Food",
+    "kopi": "Food",
+    "grocery": "Shopping",
+    "groceries": "Shopping",
+    "belanja": "Shopping",
+    "transport": "Transport",
+    "transportation": "Transport",
+    "transportasi": "Transport",
+    "shopping": "Shopping",
+    "bills": "Bills",
+    "bill": "Bills",
+    "tagihan": "Bills",
+    "utilities": "Bills",
+    "health": "Health",
+    "medical": "Health",
+    "kesehatan": "Health",
+    "entertainment": "Entertainment",
+    "hiburan": "Entertainment",
+    "education": "Education",
+    "pendidikan": "Education",
+    "salary": "Salary",
+    "gaji": "Salary",
+    "bonus": "Bonus",
+    "investment": "Investment",
+    "investasi": "Investment",
+    "dividend": "Investment",
+    "dividen": "Investment",
+    "refund": "Refund",
+    "cashback": "Refund",
+    "transfer": "Transfer",
+    "cash withdrawal": "Cash Withdrawal",
+    "tarik tunai": "Cash Withdrawal",
+    "lain-lain": "Other",
+    "lain lain": "Other",
+    "other": "Other",
+    "uncategorized": "Other",
+    # Keep leisure/travel-style labels intentionally broad.
+    "travel": "Other",
+    "vacation": "Other",
+    "holiday": "Other",
+    "liburan": "Other",
+    "wisata": "Other",
 }
 
 # wallet keyword -> canonical wallet name
@@ -58,6 +135,25 @@ def guess_category(text: str) -> str | None:
         if any(keyword in text_lower for keyword in keywords):
             return category
     return None
+
+
+def normalize_category(category: str | None, transaction_type: str | None) -> str:
+    """Collapse arbitrary LLM labels into the small category set used by the app."""
+    trx_type = (transaction_type or "EXPENSE").strip().lower()
+    allowed = {
+        "income": INCOME_CATEGORIES,
+        "transfer": TRANSFER_CATEGORIES,
+    }.get(trx_type, EXPENSE_CATEGORIES)
+
+    fallback = "Transfer" if trx_type == "transfer" else "Other"
+    if not category:
+        return fallback
+
+    normalized = " ".join(category.strip().split())
+    normalized = CATEGORY_ALIASES.get(normalized.lower(), normalized.title())
+    if normalized in allowed:
+        return normalized
+    return fallback
 
 
 def guess_wallet(text: str) -> str | None:

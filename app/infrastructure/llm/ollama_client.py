@@ -6,6 +6,11 @@ from typing import Any, Dict, Optional
 import httpx
 
 from app.core.settings import settings
+from app.domain.finance.category_keywords import (
+    EXPENSE_CATEGORIES,
+    INCOME_CATEGORIES,
+    normalize_category,
+)
 from app.domain.llm.ports import LLMPort
 
 logger = logging.getLogger(__name__)
@@ -25,12 +30,19 @@ Field wajib:
 - counterparty_name: string atau null
 
 Aturan:
+- Untuk EXPENSE, category wajib salah satu dari: {expense_categories}.
+- Untuk INCOME, category wajib salah satu dari: {income_categories}.
+- Jangan membuat category baru atau terlalu spesifik. Jika tidak cocok, pakai "Other".
+- Liburan/travel/wisata masuk "Other", bukan category baru.
 - Transfer antar-wallet dan tarik tunai adalah TRANSFER, bukan EXPENSE.
 - Tarik tunai memiliki category "Cash Withdrawal" dan target_wallet_name "Cash".
 - Pinjam dari seseorang: BORROW dan INCOME.
 - Meminjamkan ke seseorang: LEND dan EXPENSE.
 - Bayar hutang: PAY dan EXPENSE.
-""".strip()
+""".format(
+    expense_categories=", ".join(EXPENSE_CATEGORIES),
+    income_categories=", ".join(INCOME_CATEGORIES),
+).strip()
 
 
 RECEIPT_PROMPT = """
@@ -123,13 +135,17 @@ class OllamaLLM(LLMPort):
                 prompt=f"{TRANSACTION_PROMPT}\n\nTeks transaksi: {text}",
             )
             data["amount"] = int(data.get("amount") or 0)
-            data.setdefault("category", "Lain-lain")
+            data.setdefault("category", "Other")
             data.setdefault("wallet_name", "BCA")
             data.setdefault("target_wallet_name", None)
             data.setdefault("description", text[:50])
             data.setdefault("transaction_type", "EXPENSE")
             data.setdefault("debt_action", "NONE")
             data.setdefault("counterparty_name", None)
+            data["category"] = normalize_category(
+                data.get("category"),
+                data.get("transaction_type"),
+            )
             return self._with_usage(data, usage, self.text_model, include_usage)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("Respons JSON Ollama text tidak valid: %s", exc)

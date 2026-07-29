@@ -23,6 +23,7 @@ class FakeRepo:
             "BCA": SimpleNamespace(id=1, name="BCA")
         }
         self.created_transaction = None
+        self.created_category = None
 
     async def get_wallet_by_name(self, user_id, name):
         return next(
@@ -43,6 +44,7 @@ class FakeRepo:
         return None
 
     async def create_category(self, user_id, name, category_type):
+        self.created_category = SimpleNamespace(id=1, name=name, type=category_type)
         return SimpleNamespace(id=1, name=name)
 
     async def create_transaction(self, **kwargs):
@@ -65,3 +67,31 @@ class TestCashWithdrawal:
         assert "Cash" in repo.wallets
         assert repo.created_transaction["type"] == "transfer"
         assert repo.created_transaction["target_wallet_id"] == repo.wallets["Cash"].id
+
+
+class SpecificCategoryLLM:
+    async def parse_transaction(self, text):
+        return {
+            "amount": 1_000_000,
+            "category": "Vacation",
+            "wallet_name": "BCA",
+            "target_wallet_name": None,
+            "description": "Liburan ke Bandung",
+            "transaction_type": "EXPENSE",
+            "debt_action": "NONE",
+            "counterparty_name": None,
+        }
+
+
+class TestSimpleCategories:
+    async def test_specific_llm_category_falls_back_to_other(self):
+        repo = FakeRepo()
+        service = TransactionService(SpecificCategoryLLM(), repo)
+
+        result = await service.process_natural_language(
+            123,
+            "Liburan ke Bandung 1jt dari BCA",
+        )
+
+        assert "Transaksi Tercatat" in result
+        assert repo.created_category.name == "Other"

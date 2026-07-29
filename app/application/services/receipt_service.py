@@ -150,7 +150,8 @@ class ReceiptService:
         for item in priced_items:
             item_total = item["price"] * item.get("quantity", 1)
             total_amount += item_total
-            cat_name = item.get("category") or (context.default_category if context else None) or "Uncategorized"
+            raw_category = item.get("category") or (context.default_category if context else None)
+            cat_name = category_keywords.normalize_category(raw_category, "EXPENSE")
             category_totals[cat_name] += item_total
             item_names.append(f"{item['name']} x{item.get('quantity', 1)}")
 

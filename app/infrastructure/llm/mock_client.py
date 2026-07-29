@@ -3,6 +3,7 @@ import logging
 from typing import Optional, Dict, Any
 
 from app.domain.llm.ports import LLMPort
+from app.domain.finance import category_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +82,12 @@ class MockLLM(LLMPort):
             "gaji": "Salary", "bonus": "Salary",
             "listrik": "Bills", "pulsa": "Bills", "internet": "Bills",
         }
-        category = "Lain-lain"
+        category = "Other"
         for key, cat in category_map.items():
             if key in text_lower:
                 category = cat
                 break
+        category = category_keywords.normalize_category(category, transaction_type)
 
         # Counterparty untuk hutang
         counterparty_name = None

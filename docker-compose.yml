@@ -1,24 +1,143 @@
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: fm-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
+  app-finance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app-finance
+    restart: always
+    networks:
+      - backend
+    env_file:
+      - .env
+    environment:
+      APP_PORT: ${APP_PORT:-8000}
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-sarekat_db}
+      REDIS_URL: redis://redis:6379/0
+
+      TELEGRAM_TOKEN: ${FINANCE_TELEGRAM_TOKEN:-${TELEGRAM_TOKEN}}
+      GOOGLE_API_KEY: ${FINANCE_GOOGLE_API_KEY:-${GOOGLE_API_KEY}}
+      WEBHOOK_URL: ${FINANCE_WEBHOOK_URL:-${WEBHOOK_URL}}
+      DEFAULT_FREE_PLAN_CODE: ${FINANCE_DEFAULT_FREE_PLAN_CODE:-${DEFAULT_FREE_PLAN_CODE:-free}}
+      TELEGRAM_QUEUE_WORKERS: ${FINANCE_TELEGRAM_QUEUE_WORKERS:-${TELEGRAM_QUEUE_WORKERS:-2}}
+      TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS: ${FINANCE_TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS:-${TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS:-604800}}
+      TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS: ${FINANCE_TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS:-${TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS:-300}}
+
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://host.docker.internal:3000}
+      LANGFUSE_TEST_INTERFACE_ENABLED: ${LANGFUSE_TEST_INTERFACE_ENABLED:-false}
+      LANGFUSE_TEST_INTERFACE_TOKEN: ${LANGFUSE_TEST_INTERFACE_TOKEN}
+
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_TEXT_MODEL: ${OLLAMA_TEXT_MODEL:-qwen2.5:3b}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-moondream}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-120}
+
+      MIDTRANS_SERVER_KEY: ${MIDTRANS_SERVER_KEY}
+      MIDTRANS_CLIENT_KEY: ${MIDTRANS_CLIENT_KEY}
+      MIDTRANS_IS_PRODUCTION: ${MIDTRANS_IS_PRODUCTION:-false}
     ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
+      - "127.0.0.1:${APP_PORT:-8000}:${APP_PORT:-8000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${APP_PORT:-8000}/', timeout=5)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
-    restart: unless-stopped
-    command: tunnel run
+    restart: always
+    networks:
+      - backend
     volumes:
-      - ./cloudflared:/etc/cloudflared
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
+    command: tunnel --config /etc/cloudflared/config.yml run
+    environment:
+      TUNNEL_DNS_UPSTREAM: 1.1.1.1
+    depends_on:
+      app-finance:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: always
+    networks:
+      - backend
+    environment:
+      POSTGRES_DB: ${DB_NAME:-sarekat_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: always
+    networks:
+      - backend
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
 
 volumes:
-  redis-data:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

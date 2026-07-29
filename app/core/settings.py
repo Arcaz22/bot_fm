@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     OLLAMA_TIMEOUT_SECONDS: float
 
     # --- App & Telegram ---
-    APP_PORT: int
+    APP_PORT: int = 8000
     TELEGRAM_TOKEN: str
     WEBHOOK_URL: str | None = None
 
