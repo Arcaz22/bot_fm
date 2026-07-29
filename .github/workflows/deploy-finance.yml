@@ -2,12 +2,11 @@ name: Deploy Finance Bot
 
 on:
   push:
-    branches: [main] # Otomatis jalan tiap ada push ke branch main repo bot_fm
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,16 +23,33 @@ jobs:
           docker build -t ${{ secrets.DOCKER_USERNAME }}/finance-bot:latest .
           docker push ${{ secrets.DOCKER_USERNAME }}/finance-bot:latest
 
+      - name: Install cloudflared
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.MINI_PC_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Configure SSH over Cloudflare Tunnel
+        run: |
+          cat <<EOF >> ~/.ssh/config
+          Host mini-pc
+            HostName ssh.rampung.space
+            User ${{ secrets.MINI_PC_USER }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking no
+            ProxyCommand cloudflared access ssh --hostname %h
+          EOF
+
       # Perintahkan Mini PC untuk menarik image baru dari Docker Hub & restart container-nya
       - name: Deploy to Mini PC
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.MINI_PC_HOST }}
-          username: ${{ secrets.MINI_PC_USER }}
-          key: ${{ secrets.MINI_PC_SSH_KEY }}
-          script: |
-            cd ~/infrastructure
-            docker compose pull app-finance
-            docker compose up -d app-finance
-            docker compose ps app-finance
-            echo "✓ Finance Bot successfully deployed!"
+        run: |
+          ssh mini-pc "cd ~/infrastructure && \
+            docker compose pull app-finance && \
+            docker compose up -d app-finance && \
+            docker compose ps app-finance && \
+            echo '✓ Finance Bot successfully deployed!'"
