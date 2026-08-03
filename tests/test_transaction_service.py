@@ -240,6 +240,20 @@ class SavingsInvestmentLLM:
         }
 
 
+class NullDebtActionRdnLLM:
+    async def parse_transaction(self, text):
+        return {
+            "amount": 1_000_000,
+            "category": "Investment",
+            "wallet_name": "BCA",
+            "target_wallet_name": "RDN",
+            "description": text[:50],
+            "transaction_type": "TRANSFER",
+            "debt_action": None,
+            "counterparty_name": None,
+        }
+
+
 class TestSavingsAndInvestmentModel:
     async def test_personal_savings_defaults_to_transfer_to_tabungan(self):
         repo = FakeRepo()
@@ -273,6 +287,18 @@ class TestSavingsAndInvestmentModel:
         assert repo.created_transaction["target_wallet_id"] == repo.wallets["RDN"].id
         assert repo.created_category.name == "Investment"
         assert before_assets == after_assets
+
+    async def test_rdn_deposit_accepts_null_debt_action_from_llm(self):
+        repo = FakeRepo()
+        repo.wallets["BCA"].initial_balance = 3_000_000
+        service = TransactionService(NullDebtActionRdnLLM(), repo)
+
+        result = await service.process_natural_language(123, "Setor RDN 1jt dari BCA")
+
+        assert "🔄" in result
+        assert repo.created_transaction["type"] == "transfer"
+        assert repo.created_transaction["target_wallet_id"] == repo.wallets["RDN"].id
+        assert repo.created_category.name == "Investment"
 
     async def test_stock_investment_without_target_uses_investasi_wallet(self):
         repo = FakeRepo()

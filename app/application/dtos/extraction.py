@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Optional, List
 
 
@@ -12,6 +12,31 @@ class ExtractedTransaction(BaseModel):
 
     debt_action: Literal["NONE", "BORROW", "LEND", "PAY"] = "NONE"
     counterparty_name: Optional[str] = None
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def default_category(cls, value):
+        return value or "Other"
+
+    @field_validator("wallet_name", mode="before")
+    @classmethod
+    def default_wallet_name(cls, value):
+        return value or "BCA"
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def default_description(cls, value):
+        return value or ""
+
+    @field_validator("transaction_type", mode="before")
+    @classmethod
+    def default_transaction_type(cls, value):
+        return value or "EXPENSE"
+
+    @field_validator("debt_action", mode="before")
+    @classmethod
+    def default_debt_action(cls, value):
+        return value or "NONE"
 
 
 class ReceiptItem(BaseModel):
