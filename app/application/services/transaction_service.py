@@ -10,7 +10,8 @@ from app.application.dtos.extraction import ExtractedTransaction
 logger = logging.getLogger(__name__)
 
 
-AMOUNT_PATTERN = r'\b\d+(?:[.,]\d+)?\s*(?:rb|ribu|k|jt|juta)?\b'
+NUMBER_PATTERN = r'\d+(?:(?:[.,]\d{3})+|[.,]\d+)?'
+AMOUNT_PATTERN = rf'\b{NUMBER_PATTERN}\s*(?:rb|ribu|k|jt|juta)?\b'
 SELF_PATTERN = r'(?:saya|aku|gue|gw)'
 CASH_WITHDRAWAL_PATTERN = r'\b(?:tarik\s+tunai|penarikan\s+tunai|cash\s+withdrawal|withdraw(?:al)?\s+cash)\b'
 BALANCE_SETUP_KEYWORDS = (
@@ -18,6 +19,12 @@ BALANCE_SETUP_KEYWORDS = (
     "saldo awal",
     "set saldo",
     "atur saldo",
+    "setup wallet",
+    "set wallet",
+    "atur wallet",
+    "setup ewallet",
+    "set ewallet",
+    "atur ewallet",
     "migrasi",
     "migration",
     "import saldo",
@@ -65,13 +72,29 @@ def _extract_debt_hint(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _extract_amount(text: str) -> float | None:
-    match = re.search(r'\b(\d+(?:[.,]\d+)?)\s*(rb|ribu|k|jt|juta)?\b', text.lower())
-    if not match:
-        return None
+def _parse_amount_value(raw_amount: str, suffix: str | None = None) -> float:
+    separators = [char for char in raw_amount if char in {".", ","}]
 
-    raw_amount, suffix = match.groups()
-    amount = float(raw_amount.replace(",", "."))
+    if separators:
+        last_separator = separators[-1]
+        last_separator_index = raw_amount.rfind(last_separator)
+        decimal_digits = len(raw_amount) - last_separator_index - 1
+        has_mixed_separators = "." in separators and "," in separators
+        has_repeated_separators = separators.count(last_separator) > 1
+        suffix_multiplier = suffix in {"rb", "ribu", "k", "jt", "juta"}
+
+        if (
+            has_mixed_separators
+            or has_repeated_separators
+            or (decimal_digits == 3 and not suffix_multiplier)
+        ):
+            normalized = re.sub(r"[.,]", "", raw_amount)
+        else:
+            normalized = raw_amount.replace(",", ".")
+    else:
+        normalized = raw_amount
+
+    amount = float(normalized)
 
     if suffix in {"rb", "ribu", "k"}:
         amount *= 1000
@@ -79,6 +102,16 @@ def _extract_amount(text: str) -> float | None:
         amount *= 1000000
 
     return amount
+
+
+def _extract_amount(text: str) -> float | None:
+    matches = list(re.finditer(rf'\b({NUMBER_PATTERN})\s*(rb|ribu|k|jt|juta)?\b', text.lower()))
+    if not matches:
+        return None
+
+    match = next((item for item in matches if item.group(2)), matches[0])
+    raw_amount, suffix = match.groups()
+    return _parse_amount_value(raw_amount, suffix)
 
 
 def _is_cash_withdrawal(text: str) -> bool:
@@ -93,10 +126,7 @@ def _extract_balance_setup(text: str) -> tuple[str, float] | None:
 
     text_lower = text.lower()
     has_setup_keyword = any(keyword in text_lower for keyword in BALANCE_SETUP_KEYWORDS)
-    has_transaction_keyword = any(keyword in text_lower for keyword in _FAST_PATH_DISQUALIFIERS)
-    has_expense_category = category_keywords.guess_category(text) is not None
-
-    if has_setup_keyword or not has_transaction_keyword and not has_expense_category:
+    if has_setup_keyword:
         return wallet_name, amount
 
     return None
@@ -209,6 +239,8 @@ class TransactionService:
                         return "🤖 Maaf, saya gagal paham. Coba kalimat simpel: 'Makan 20rb pake OVO' atau 'Transfer 50rb dari BCA ke Gopay'"
 
                 data = ExtractedTransaction(**raw_data)
+                if amount_hint:
+                    data.amount = amount_hint
 
             # Tarik tunai adalah perpindahan aset dari rekening ke uang fisik,
             # bukan pengeluaran. Jangan bergantung pada klasifikasi LLM untuk ini.

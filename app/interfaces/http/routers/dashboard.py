@@ -461,8 +461,13 @@ async def _get_wallet_balances(session: AsyncSession, user_id: int) -> list[dict
         .select_from(MstWallet)
         .outerjoin(
             TrsTransaction,
-            (TrsTransaction.wallet_id == MstWallet.id)
-            | (TrsTransaction.target_wallet_id == MstWallet.id),
+            and_(
+                TrsTransaction.owner_telegram_user_id == user_id,
+                (
+                    (TrsTransaction.wallet_id == MstWallet.id)
+                    | (TrsTransaction.target_wallet_id == MstWallet.id)
+                ),
+            ),
         )
         .where(
             MstWallet.owner_telegram_user_id == user_id,

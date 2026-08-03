@@ -17,6 +17,20 @@ class FakeLLM:
         }
 
 
+class WrongAmountIncomeLLM:
+    async def parse_transaction(self, text):
+        return {
+            "amount": 580_000,
+            "category": "Salary",
+            "wallet_name": "BCA",
+            "target_wallet_name": None,
+            "description": "Gaji bulan agustus",
+            "transaction_type": "INCOME",
+            "debt_action": "NONE",
+            "counterparty_name": None,
+        }
+
+
 class FakeRepo:
     def __init__(self):
         self.wallets = {
@@ -79,6 +93,32 @@ class TestCashWithdrawal:
 
 
 class TestBalanceMigration:
+    async def test_balance_migration_parses_k_suffix_with_large_number(self):
+        repo = FakeRepo()
+        service = TransactionService(FakeLLM(), repo)
+
+        result = await service.process_natural_language(
+            123,
+            "Setup wallet gopay 27840k",
+        )
+
+        assert "Saldo Wallet Diatur" in result
+        assert repo.wallets["Gopay"].initial_balance == 27_840_000
+        assert repo.created_transaction is None
+
+    async def test_balance_migration_parses_dot_thousands_without_suffix(self):
+        repo = FakeRepo()
+        service = TransactionService(FakeLLM(), repo)
+
+        result = await service.process_natural_language(
+            123,
+            "Setup wallet gopay 27.840",
+        )
+
+        assert "Saldo Wallet Diatur" in result
+        assert repo.wallets["Gopay"].initial_balance == 27_840
+        assert repo.created_transaction is None
+
     async def test_balance_migration_creates_wallet_without_transaction(self):
         repo = FakeRepo()
         service = TransactionService(FakeLLM(), repo)
@@ -106,6 +146,33 @@ class TestBalanceMigration:
         assert "Saldo Wallet Diatur" in result
         assert repo.wallets["Gopay"].initial_balance == 20_000
         assert repo.created_transaction is None
+
+
+class TestIncomeParsing:
+    async def test_income_uses_deterministic_amount_hint_over_llm_amount(self):
+        repo = FakeRepo()
+        service = TransactionService(WrongAmountIncomeLLM(), repo)
+
+        result = await service.process_natural_language(
+            123,
+            "Gaji bulan agustus 5.8 jt",
+        )
+
+        assert "Transaksi Tercatat" in result
+        assert repo.created_transaction["type"] == "income"
+        assert repo.created_transaction["amount"] == 5_800_000
+
+    async def test_income_prefers_suffixed_amount_when_text_has_other_numbers(self):
+        repo = FakeRepo()
+        service = TransactionService(WrongAmountIncomeLLM(), repo)
+
+        result = await service.process_natural_language(
+            123,
+            "Gaji bulan 8 5.8 jt",
+        )
+
+        assert "Transaksi Tercatat" in result
+        assert repo.created_transaction["amount"] == 5_800_000
 
 
 class SpecificCategoryLLM:
