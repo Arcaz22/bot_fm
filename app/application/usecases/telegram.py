@@ -13,7 +13,7 @@ from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
-DASHBOARD_URL = "https://dashboard-finance.rampung.space"
+DASHBOARD_URL = "https://dashboard-fm-azure.vercel.app/"
 
 
 def _normalize_phone(phone_number: str) -> str:

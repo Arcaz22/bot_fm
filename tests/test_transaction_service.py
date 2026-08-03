@@ -20,7 +20,7 @@ class FakeLLM:
 class FakeRepo:
     def __init__(self):
         self.wallets = {
-            "BCA": SimpleNamespace(id=1, name="BCA")
+            "BCA": SimpleNamespace(id=1, name="BCA", initial_balance=0)
         }
         self.created_transaction = None
         self.created_category = None
@@ -36,9 +36,18 @@ class FakeRepo:
         )
 
     async def create_wallet(self, user_id, name, initial_balance=0):
-        wallet = SimpleNamespace(id=len(self.wallets) + 1, name=name)
+        wallet = SimpleNamespace(id=len(self.wallets) + 1, name=name, initial_balance=initial_balance)
         self.wallets[name] = wallet
         return wallet
+
+    async def set_wallet_initial_balance(self, user_id, wallet_id, initial_balance):
+        wallet = next(wallet for wallet in self.wallets.values() if wallet.id == wallet_id)
+        wallet.initial_balance = initial_balance
+        return wallet
+
+    async def get_wallet_balance(self, wallet_id, user_id):
+        wallet = next(wallet for wallet in self.wallets.values() if wallet.id == wallet_id)
+        return wallet.initial_balance
 
     async def get_category_by_name(self, user_id, name, category_type):
         return None
@@ -67,6 +76,36 @@ class TestCashWithdrawal:
         assert "Cash" in repo.wallets
         assert repo.created_transaction["type"] == "transfer"
         assert repo.created_transaction["target_wallet_id"] == repo.wallets["Cash"].id
+
+
+class TestBalanceMigration:
+    async def test_balance_migration_creates_wallet_without_transaction(self):
+        repo = FakeRepo()
+        service = TransactionService(FakeLLM(), repo)
+
+        result = await service.process_natural_language(
+            123,
+            "saldo gopay 20k",
+        )
+
+        assert "Saldo Wallet Diatur" in result
+        assert "transfer dari wallet lain" in result
+        assert repo.wallets["Gopay"].initial_balance == 20_000
+        assert repo.created_transaction is None
+
+    async def test_balance_migration_adjusts_existing_wallet_to_target_balance(self):
+        repo = FakeRepo()
+        repo.wallets["Gopay"] = SimpleNamespace(id=2, name="Gopay", initial_balance=5_000)
+        service = TransactionService(FakeLLM(), repo)
+
+        result = await service.process_natural_language(
+            123,
+            "set saldo gopay 20k",
+        )
+
+        assert "Saldo Wallet Diatur" in result
+        assert repo.wallets["Gopay"].initial_balance == 20_000
+        assert repo.created_transaction is None
 
 
 class SpecificCategoryLLM:

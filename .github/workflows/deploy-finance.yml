@@ -3,6 +3,11 @@ name: Deploy Finance Bot
 on:
   push:
     branches: [main]
+    paths:
+      - '**'
+      - '!README.md'
+      - '!docs/**'
+      - '!.gitignore'
 
 jobs:
   deploy:
@@ -17,16 +22,19 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Build & Push langsung dari root project bot_fm
       - name: Build and Push Docker image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/finance-bot:latest .
-          docker push ${{ secrets.DOCKER_USERNAME }}/finance-bot:latest
+          IMAGE=${{ secrets.DOCKER_USERNAME }}/finance-bot
+          SHA_TAG=${{ github.sha }}
+          docker build -t $IMAGE:$SHA_TAG -t $IMAGE:latest .
+          docker push $IMAGE:$SHA_TAG
+          docker push $IMAGE:latest
 
       - name: Install cloudflared
         run: |
-          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared.deb
+          curl -L --output /usr/local/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x /usr/local/bin/cloudflared
 
       - name: Setup SSH key
         run: |
@@ -35,6 +43,9 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
 
       - name: Configure SSH over Cloudflare Tunnel
+        env:
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           cat <<EOF >> ~/.ssh/config
           Host mini-pc
@@ -42,14 +53,14 @@ jobs:
             User ${{ secrets.MINI_PC_USER }}
             IdentityFile ~/.ssh/id_rsa
             StrictHostKeyChecking no
-            ProxyCommand cloudflared access ssh --hostname %h
+            ProxyCommand cloudflared access ssh --hostname %h --service-token-id $TUNNEL_SERVICE_TOKEN_ID --service-token-secret $TUNNEL_SERVICE_TOKEN_SECRET
           EOF
 
-      # Perintahkan Mini PC untuk menarik image baru dari Docker Hub & restart container-nya
       - name: Deploy to Mini PC
         run: |
           ssh mini-pc "cd ~/infrastructure && \
             docker compose pull app-finance && \
             docker compose up -d app-finance && \
             docker compose ps app-finance && \
+            docker image prune -f && \
             echo '✓ Finance Bot successfully deployed!'"

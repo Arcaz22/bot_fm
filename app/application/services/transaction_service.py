@@ -13,6 +13,15 @@ logger = logging.getLogger(__name__)
 AMOUNT_PATTERN = r'\b\d+(?:[.,]\d+)?\s*(?:rb|ribu|k|jt|juta)?\b'
 SELF_PATTERN = r'(?:saya|aku|gue|gw)'
 CASH_WITHDRAWAL_PATTERN = r'\b(?:tarik\s+tunai|penarikan\s+tunai|cash\s+withdrawal|withdraw(?:al)?\s+cash)\b'
+BALANCE_SETUP_KEYWORDS = (
+    "saldo",
+    "saldo awal",
+    "set saldo",
+    "atur saldo",
+    "migrasi",
+    "migration",
+    "import saldo",
+)
 
 
 def _clean_counterparty_name(name: str) -> str:
@@ -76,6 +85,23 @@ def _is_cash_withdrawal(text: str) -> bool:
     return bool(re.search(CASH_WITHDRAWAL_PATTERN, text, flags=re.IGNORECASE))
 
 
+def _extract_balance_setup(text: str) -> tuple[str, float] | None:
+    amount = _extract_amount(text)
+    wallet_name = category_keywords.guess_wallet(text)
+    if amount is None or wallet_name is None:
+        return None
+
+    text_lower = text.lower()
+    has_setup_keyword = any(keyword in text_lower for keyword in BALANCE_SETUP_KEYWORDS)
+    has_transaction_keyword = any(keyword in text_lower for keyword in _FAST_PATH_DISQUALIFIERS)
+    has_expense_category = category_keywords.guess_category(text) is not None
+
+    if has_setup_keyword or not has_transaction_keyword and not has_expense_category:
+        return wallet_name, amount
+
+    return None
+
+
 # Keywords that signal the message is NOT a simple single-wallet expense.
 # Any hit here disqualifies the regex fast-path and forces the LLM call,
 # since transfer/income parsing needs judgment the regex isn't trusted with.
@@ -98,6 +124,37 @@ class TransactionService:
 
     async def process_natural_language(self, user_id: int, text: str) -> str:
         try:
+            balance_setup = _extract_balance_setup(text)
+            if balance_setup:
+                wallet_name, amount = balance_setup
+                rules.validate_transaction_amount(amount)
+
+                clean_wallet_name = rules.normalize_wallet_name(wallet_name)
+                wallet = await self.repo.get_wallet_by_name(user_id, clean_wallet_name)
+
+                if not wallet:
+                    wallet = await self.repo.create_wallet(
+                        user_id,
+                        clean_wallet_name,
+                        initial_balance=amount,
+                    )
+                else:
+                    current_balance = await self.repo.get_wallet_balance(wallet.id, user_id)
+                    current_initial = float(getattr(wallet, "initial_balance", 0) or 0)
+                    new_initial = current_initial + (amount - current_balance)
+                    wallet = await self.repo.set_wallet_initial_balance(
+                        user_id,
+                        wallet.id,
+                        new_initial,
+                    )
+
+                return (
+                    "💼 **Saldo Wallet Diatur!**\n\n"
+                    f"💳 {wallet.name}\n"
+                    f"💰 Rp {amount:,.0f}\n\n"
+                    "Saldo ini dicatat sebagai saldo migrasi/manual, bukan transfer dari wallet lain."
+                )
+
             debt_action, counterparty_name = _extract_debt_hint(text)
             amount_hint = _extract_amount(text)
             is_cash_withdrawal = _is_cash_withdrawal(text)

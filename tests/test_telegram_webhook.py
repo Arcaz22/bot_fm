@@ -110,7 +110,7 @@ class FakeFinanceRepo:
 
     def __init__(self):
         self.wallets: dict[str, SimpleNamespace] = {
-            "BCA": SimpleNamespace(id=1, name="BCA")
+            "BCA": SimpleNamespace(id=1, name="BCA", initial_balance=0)
         }
         self.last_transaction = None
 
@@ -118,9 +118,18 @@ class FakeFinanceRepo:
         return self.wallets.get(name)
 
     async def create_wallet(self, user_id, name, initial_balance=0):
-        wallet = SimpleNamespace(id=len(self.wallets) + 1, name=name)
+        wallet = SimpleNamespace(id=len(self.wallets) + 1, name=name, initial_balance=initial_balance)
         self.wallets[name] = wallet
         return wallet
+
+    async def set_wallet_initial_balance(self, user_id, wallet_id, initial_balance):
+        wallet = next(wallet for wallet in self.wallets.values() if wallet.id == wallet_id)
+        wallet.initial_balance = initial_balance
+        return wallet
+
+    async def get_wallet_balance(self, wallet_id, user_id):
+        wallet = next(wallet for wallet in self.wallets.values() if wallet.id == wallet_id)
+        return wallet.initial_balance
 
     async def get_category_by_name(self, user_id, name, category_type):
         return None

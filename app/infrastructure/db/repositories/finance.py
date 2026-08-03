@@ -37,6 +37,27 @@ class FinanceRepo:
         await self.session.refresh(wallet)
         return wallet
 
+    async def set_wallet_initial_balance(
+        self,
+        user_id: int,
+        wallet_id: int,
+        initial_balance: float
+    ) -> MstWallet:
+        stmt = select(MstWallet).where(
+            MstWallet.id == wallet_id,
+            MstWallet.owner_telegram_user_id == user_id,
+            MstWallet.is_active == True
+        )
+        result = await self.session.execute(stmt)
+        wallet = result.scalars().first()
+        if not wallet:
+            raise ValueError(f"Wallet {wallet_id} tidak ditemukan atau bukan milik user {user_id}")
+
+        wallet.initial_balance = initial_balance
+        await self.session.commit()
+        await self.session.refresh(wallet)
+        return wallet
+
     async def find_user_by_name_or_username(self, query: str) -> Optional[SysTelegramUser]:
         stmt = select(SysTelegramUser).where(
             or_(

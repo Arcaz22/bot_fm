@@ -1,5 +1,14 @@
 .venv
 __pycache__
-.env
+*.pyc
 .git
-cloudflared/
+.gitignore
+.env
+.env.*
+*.md
+.pytest_cache
+.mypy_cache
+tests/
+.github
+Dockerfile
+.dockerignore
