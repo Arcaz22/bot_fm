@@ -297,6 +297,39 @@ class TestCommandHandling:
 
         assert "Fitur Bot" in notif.sent[0][1]
 
+    async def test_menu_command_alias(self):
+        user = _make_user()
+        usecase, notif, _ = _make_usecase(existing_user=user)
+
+        await usecase.execute(_make_update(text="/menu"))
+
+        reply = notif.sent[0][1]
+        assert "Fitur Bot" in reply
+        assert "/menu" in reply
+        assert "set saldo" in reply
+        assert "investasi" in reply
+
+    async def test_unknown_command_suggests_correct_format(self):
+        user = _make_user()
+        usecase, notif, _ = _make_usecase(existing_user=user)
+
+        await usecase.execute(_make_update(text="/hlep"))
+
+        reply = notif.sent[0][1]
+        assert "belum dikenali" in reply
+        assert "/help" in reply or "/menu" in reply
+
+    async def test_nlp_feature_command_suggests_plain_text_format(self):
+        user = _make_user()
+        usecase, notif, _ = _make_usecase(existing_user=user)
+
+        await usecase.execute(_make_update(text="/investment"))
+
+        reply = notif.sent[0][1]
+        assert "bukan format command" in reply
+        assert "kalimat biasa" in reply
+        assert "investasi RDN 1jt dari BCA" in reply
+
     async def test_deprecated_saldo_redirects_to_dashboard(self):
         user = _make_user()
         usecase, notif, _ = _make_usecase(existing_user=user)

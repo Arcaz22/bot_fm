@@ -1,4 +1,5 @@
 import logging
+import difflib
 import re
 from app.domain.membership.rules import resolve_usage_period
 from typing import Set
@@ -14,6 +15,45 @@ from app.core.settings import settings
 logger = logging.getLogger(__name__)
 
 DASHBOARD_URL = "https://dashboard-fm-azure.vercel.app/"
+
+HELP_COMMANDS = {"/fitur", "/help", "/menu", "/bantuan"}
+DASHBOARD_COMMANDS = {"/saldo", "/riwayat", "/history", "/hutang", "/piutang"}
+SYSTEM_COMMANDS = {"/start", "/phone"}
+KNOWN_COMMANDS = sorted(SYSTEM_COMMANDS | HELP_COMMANDS | DASHBOARD_COMMANDS)
+NLP_FEATURE_FORMATS = {
+    "/investment": [
+        "`investasi RDN 1jt dari BCA`",
+        "`investasi saham 1jt dari BCA`",
+    ],
+    "/investasi": [
+        "`investasi RDN 1jt dari BCA`",
+        "`investasi saham 1jt dari BCA`",
+    ],
+    "/rdn": [
+        "`investasi RDN 1jt dari BCA`",
+        "`setor RDN 1jt dari BCA`",
+    ],
+    "/tabungan": [
+        "`nabung 500rb dari BCA`",
+        "`transfer 500rb dari BCA ke Tabungan`",
+    ],
+    "/nabung": [
+        "`nabung 500rb dari BCA`",
+        "`transfer 500rb dari BCA ke Tabungan`",
+    ],
+    "/transfer": [
+        "`transfer 100rb dari BCA ke Gopay`",
+        "`kirim 100rb dari BCA ke Dana`",
+    ],
+    "/struk": [
+        "kirim foto struk langsung ke bot",
+        "kirim foto struk dengan caption `belanja bulanan`",
+    ],
+    "/receipt": [
+        "kirim foto struk langsung ke bot",
+        "kirim foto struk dengan caption `belanja bulanan`",
+    ],
+}
 
 
 def _normalize_phone(phone_number: str) -> str:
@@ -132,19 +172,50 @@ def _get_features_message() -> str:
         "⚙️ **Perintah**\n"
         "• `/start` - mulai pakai bot dan daftar akun Telegram\n"
         "• `/phone` - simpan nomor Telegram untuk login dashboard\n"
-        "• `/fitur` atau `/help` - tampilkan panduan ini\n\n"
+        "• `/fitur`, `/help`, `/menu`, atau `/bantuan` - tampilkan panduan ini\n"
+        "• `/saldo`, `/riwayat`, `/history`, `/hutang`, `/piutang` - buka data di dashboard\n\n"
+        "Untuk mencatat transaksi, jangan pakai `/`. Tulis kalimat biasa seperti contoh di bawah.\n\n"
         "💬 **Catat transaksi**\n"
         "Ketik transaksi seperti ngobrol, tanpa format khusus.\n"
         "• `makan siang 25rb pake OVO`\n"
         "• `gajian 5 juta masuk BCA`\n"
         "• `transfer 100rb dari BCA ke Gopay`\n\n"
+        "💼 **Atur saldo awal wallet**\n"
+        "• `set saldo BCA 2 juta`\n"
+        "• `saldo awal Gopay 150rb`\n\n"
+        "🏦 **Tabungan, investasi, dan tarik tunai**\n"
+        "• `nabung 500rb dari BCA`\n"
+        "• `investasi saham 1jt dari BCA`\n"
+        "• `tarik tunai 300rb dari BCA`\n\n"
         "🤝 **Catat hutang/piutang**\n"
-        "• `hutang ke Budi 50rb`\n"
-        "• `Sari hutang ke saya 75rb`\n"
-        "• `bayar hutang ke Budi 25rb`\n\n"
+        "• `hutang ke (nama) 100k`\n"
+        "• `(nama) hutang ke saya 100k`\n"
+        "• `bayar hutang ke (nama) 50k`\n\n"
         "🧾 **Catat dari struk**\n"
         "Kirim foto struk atau nota belanja. Bot akan membaca item dan menyimpannya sebagai transaksi.\n"
         "Tambahkan caption jika ingin menyimpan catatan tambahan."
+    )
+
+
+def _get_unknown_command_message(command: str) -> str:
+    if command in NLP_FEATURE_FORMATS:
+        examples = "\n".join(f"• {item}" for item in NLP_FEATURE_FORMATS[command])
+        return (
+            f"`{command}` bukan format command untuk mencatat data.\n\n"
+            "Tulis sebagai kalimat biasa, contoh:\n"
+            f"{examples}\n\n"
+            "Ketik `/menu` untuk melihat contoh fitur lain."
+        )
+
+    suggestions = difflib.get_close_matches(command, KNOWN_COMMANDS, n=3, cutoff=0.45)
+    if not suggestions:
+        suggestions = ["/menu"]
+
+    suggestion_text = ", ".join(f"`{item}`" for item in suggestions)
+    return (
+        f"Perintah `{command}` belum dikenali.\n\n"
+        f"Mungkin maksud Anda: {suggestion_text}\n"
+        "Ketik `/menu` untuk melihat format penulisan dan contoh fitur."
     )
 
 
@@ -356,17 +427,21 @@ class HandleTelegramUpdate:
             await self._send_phone_prompt(chat_id)
             return
 
-        if command in {"/fitur", "/help"}:
+        if command in HELP_COMMANDS:
             logger.info(f"Feature guide command for user {chat_id}")
             await self.notifier.send_message(chat_id, _get_features_message())
             return
 
         # Command baca data lama tidak lagi mengambil data dari Telegram.
-        if command in {"/saldo", "/riwayat", "/history", "/hutang", "/piutang"}:
+        if command in DASHBOARD_COMMANDS:
             logger.info(f"Deprecated data command {command} for user {chat_id}, redirecting to dashboard")
             await self.notifier.send_message(chat_id, _get_dashboard_redirect_message())
             return
 
+        if command:
+            logger.info(f"Unknown command {command} for user {chat_id}")
+            await self.notifier.send_message(chat_id, _get_unknown_command_message(command))
+            return
 
         # --- 4. Intent-Based Routing (Hanya jika IDLE) ---
         if user.current_state == "IDLE":
