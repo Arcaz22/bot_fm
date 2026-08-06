@@ -1,5 +1,38 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Literal, Optional, List
+from typing import Any, Literal, Optional, List
+
+
+def _parse_receipt_money(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    raw = value.strip()
+    if not raw:
+        return value
+
+    cleaned = raw.replace("Rp", "").replace("rp", "").replace("IDR", "").strip()
+    cleaned = cleaned.replace(" ", "")
+
+    if "," in cleaned and "." in cleaned:
+        if cleaned.rfind(",") > cleaned.rfind("."):
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
+    elif "." in cleaned:
+        parts = cleaned.split(".")
+        if len(parts) > 1 and all(len(part) == 3 for part in parts[1:]):
+            cleaned = "".join(parts)
+    elif "," in cleaned:
+        parts = cleaned.split(",")
+        if len(parts) > 1 and all(len(part) == 3 for part in parts[1:]):
+            cleaned = "".join(parts)
+        else:
+            cleaned = cleaned.replace(",", ".")
+
+    try:
+        return float(cleaned)
+    except ValueError:
+        return value
 
 
 class ExtractedTransaction(BaseModel):
@@ -45,6 +78,11 @@ class ReceiptItem(BaseModel):
     price: float
     category: str = "Uncategorized"
 
+    @field_validator("price", mode="before")
+    @classmethod
+    def parse_price(cls, value):
+        return _parse_receipt_money(value)
+
 
 class ExtractedReceipt(BaseModel):
     store_name: Optional[str] = None
@@ -53,6 +91,11 @@ class ExtractedReceipt(BaseModel):
     tax: Optional[float] = None
     total: float
     transaction_date: Optional[str] = None
+
+    @field_validator("subtotal", "tax", "total", mode="before")
+    @classmethod
+    def parse_money(cls, value):
+        return _parse_receipt_money(value)
 
 
 class ReceiptContext(BaseModel):

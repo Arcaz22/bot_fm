@@ -17,6 +17,72 @@ class ReceiptService:
         self.llm = llm
         self.repo = repo
 
+    def _normalize_suspicious_rupiah_amounts(self, receipt_data: dict) -> dict:
+        """Correct OCR/vision reads like 55.000 -> 55 on Indonesian receipts."""
+        money_values: List[float] = []
+        for field in ("subtotal", "tax", "total"):
+            value = receipt_data.get(field)
+            if isinstance(value, (int, float)) and value > 0:
+                money_values.append(float(value))
+
+        for item in receipt_data.get("items", []):
+            price = item.get("price")
+            if isinstance(price, (int, float)) and price > 0:
+                money_values.append(float(price))
+
+        if not money_values:
+            return receipt_data
+
+        max_amount = max(money_values)
+        if 10 <= max_amount < 1000:
+            logger.info("Receipt amounts look truncated; scaling rupiah values by 1000")
+            for field in ("subtotal", "tax", "total"):
+                value = receipt_data.get(field)
+                if isinstance(value, (int, float)) and value > 0:
+                    receipt_data[field] = value * 1000
+
+            for item in receipt_data.get("items", []):
+                price = item.get("price")
+                if isinstance(price, (int, float)) and price > 0:
+                    item["price"] = price * 1000
+
+        return receipt_data
+
+    def _should_use_receipt_total(
+        self,
+        all_items: List[dict],
+        priced_items: List[dict],
+        selected_indices: Optional[List[int]],
+        context: Optional[ReceiptContext],
+    ) -> bool:
+        if selected_indices is not None:
+            return False
+        if context and context.selected_items is not None:
+            return False
+
+        priced_ids = {id(item) for item in priced_items}
+        return all(
+            item.get("price", 0) <= 0 or id(item) in priced_ids
+            for item in all_items
+        )
+
+    def _receipt_total_candidate(self, receipt_data: dict, item_sum: float) -> Optional[float]:
+        total = receipt_data.get("total")
+        if isinstance(total, (int, float)) and total >= item_sum * 0.5:
+            return float(total)
+
+        subtotal = receipt_data.get("subtotal")
+        tax = receipt_data.get("tax")
+        if isinstance(subtotal, (int, float)) and isinstance(tax, (int, float)):
+            tax_amount = float(tax)
+            if 0 < tax_amount < 1000 <= subtotal:
+                tax_amount *= 1000
+            subtotal_plus_tax = float(subtotal) + tax_amount
+            if subtotal_plus_tax >= item_sum * 0.5:
+                return subtotal_plus_tax
+
+        return None
+
     async def extract_from_image(
         self,
         image_bytes: bytes,
@@ -38,9 +104,10 @@ class ReceiptService:
 
         try:
             receipt = ExtractedReceipt(**raw_data)
+            receipt_data = self._normalize_suspicious_rupiah_amounts(receipt.model_dump())
             return {
                 "success": True,
-                "data": receipt.model_dump(),
+                "data": receipt_data,
                 "context_applied": context.model_dump() if context else None
             }
         except Exception as e:
@@ -143,17 +210,24 @@ class ReceiptService:
             wallet = await self.repo.create_wallet(user_id, clean_wallet_name)
 
         # 5. Hitung total & kategori dominan (by value) dari item yang disertakan
-        total_amount = 0.0
+        item_sum = 0.0
         category_totals: dict[str, float] = defaultdict(float)
         item_names: List[str] = []
 
         for item in priced_items:
             item_total = item["price"] * item.get("quantity", 1)
-            total_amount += item_total
+            item_sum += item_total
             raw_category = item.get("category") or (context.default_category if context else None)
             cat_name = category_keywords.normalize_category(raw_category, "EXPENSE")
             category_totals[cat_name] += item_total
             item_names.append(f"{item['name']} x{item.get('quantity', 1)}")
+
+        if (
+            self._should_use_receipt_total(all_items, priced_items, selected_indices, context)
+        ):
+            total_amount = self._receipt_total_candidate(receipt_data, item_sum) or item_sum
+        else:
+            total_amount = item_sum
 
         dominant_category = max(category_totals, key=category_totals.get)
 
