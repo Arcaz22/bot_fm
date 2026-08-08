@@ -19,4 +19,8 @@ def normalize_wallet_name(raw_name: str) -> str:
     """Standardisasi nama wallet (misal user ketik 'bca ' jadi 'BCA')"""
     if not raw_name:
         return "Cash"
-    return raw_name.strip().title()
+    normalized = raw_name.strip()
+    acronym_wallets = {
+        "rdn": "RDN",
+    }
+    return acronym_wallets.get(normalized.lower(), normalized.title())

@@ -25,7 +25,11 @@ class MockLLM(LLMPort):
         text_lower = text.lower()
 
         # Deteksi transaction type
-        if any(k in text_lower for k in ["transfer", "pindah"]):
+        if any(k in text_lower for k in ["tabungan bersama", "patungan", "setoran bersama", "iuran tabungan"]):
+            transaction_type = "EXPENSE"
+        elif any(k in text_lower for k in ["nabung", "menabung", "tabungan", "investasi", "rdn", "saham", "reksadana", "rekasadana", "stockbit", "ajaib", "crypto", "kripto"]):
+            transaction_type = "TRANSFER"
+        elif any(k in text_lower for k in ["transfer", "pindah"]):
             transaction_type = "TRANSFER"
         elif any(k in text_lower for k in ["gaji", "gajian", "bonus", "masuk", "terima", "dapat"]):
             transaction_type = "INCOME"
@@ -60,6 +64,9 @@ class MockLLM(LLMPort):
             "gopay": "Gopay", "ovo": "OVO", "dana": "Dana",
             "mandiri": "Mandiri", "bni": "BNI", "bri": "BRI",
             "cash": "Cash", "tunai": "Cash",
+            "tabungan": "Tabungan", "rdn": "RDN", "stockbit": "Stockbit",
+            "ajaib": "Ajaib", "investasi": "Investasi",
+            "crypto": "Crypto", "kripto": "Crypto",
         }
         wallet_name = "BCA"
         for key, name in wallet_map.items():
@@ -69,10 +76,22 @@ class MockLLM(LLMPort):
 
         target_wallet_name = None
         if transaction_type == "TRANSFER":
-            for key, name in wallet_map.items():
-                if key in text_lower and name != wallet_name:
-                    target_wallet_name = name
-                    break
+            if "rdn" in text_lower:
+                target_wallet_name = "RDN"
+            elif any(k in text_lower for k in ["stockbit", "ajaib", "crypto", "kripto"]):
+                for key, name in wallet_map.items():
+                    if key in text_lower and name != wallet_name:
+                        target_wallet_name = name
+                        break
+            elif any(k in text_lower for k in ["investasi", "saham", "reksadana", "rekasadana"]):
+                target_wallet_name = "Investasi"
+            elif any(k in text_lower for k in ["nabung", "menabung", "tabungan"]):
+                target_wallet_name = "Tabungan"
+            else:
+                for key, name in wallet_map.items():
+                    if key in text_lower and name != wallet_name:
+                        target_wallet_name = name
+                        break
 
         # Deteksi kategori
         category_map = {
@@ -81,6 +100,13 @@ class MockLLM(LLMPort):
             "belanja": "Shopping", "beli": "Shopping",
             "gaji": "Salary", "bonus": "Salary",
             "listrik": "Bills", "pulsa": "Bills", "internet": "Bills",
+            "tabungan bersama": "Joint Savings", "patungan": "Joint Savings",
+            "setoran bersama": "Joint Savings", "iuran tabungan": "Joint Savings",
+            "nabung": "Savings", "menabung": "Savings", "tabungan": "Savings",
+            "investasi": "Investment", "rdn": "Investment", "saham": "Investment",
+            "reksadana": "Investment", "rekasadana": "Investment",
+            "stockbit": "Investment", "ajaib": "Investment",
+            "crypto": "Investment", "kripto": "Investment",
         }
         category = "Other"
         for key, cat in category_map.items():

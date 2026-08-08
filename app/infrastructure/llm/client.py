@@ -14,6 +14,7 @@ from app.core.settings import settings
 from app.domain.finance.category_keywords import (
     EXPENSE_CATEGORIES,
     INCOME_CATEGORIES,
+    TRANSFER_CATEGORIES,
     normalize_category,
 )
 from app.domain.llm.ports import LLMPort
@@ -198,9 +199,20 @@ class GeminiLLM(LLMPort):
         Aturan kategori:
         - Untuk EXPENSE, category wajib salah satu dari: {", ".join(EXPENSE_CATEGORIES)}
         - Untuk INCOME, category wajib salah satu dari: {", ".join(INCOME_CATEGORIES)}
+        - Untuk TRANSFER, category wajib salah satu dari: {", ".join(TRANSFER_CATEGORIES)}
         - Jangan membuat category baru atau terlalu spesifik.
         - Jika tidak cocok, pakai "Other".
         - Liburan/travel/wisata masuk "Other", bukan category baru.
+
+        Aturan tabungan dan investasi:
+        - Tabungan pribadi adalah TRANSFER, category "Savings", target_wallet_name "Tabungan".
+        - Jika teks hanya "nabung 500rb", tetap TRANSFER ke "Tabungan".
+        - RDN, saham, reksadana, Stockbit, Ajaib, crypto/kripto adalah aset pribadi:
+          gunakan TRANSFER dan category "Investment".
+        - Setor RDN adalah TRANSFER ke target_wallet_name "RDN".
+        - Investasi saham/reksadana tanpa target eksplisit adalah TRANSFER ke "Investasi".
+        - Tabungan bersama/patungan/setoran bersama/iuran tabungan yang dikirim
+          ke orang lain adalah EXPENSE, category "Joint Savings", bukan TRANSFER.
 
         Aturan Debt:
         - "Pinjam dari X" / "Minjem ke X" → BORROW (user hutang, INCOME)
@@ -217,6 +229,9 @@ class GeminiLLM(LLMPort):
         - "Beli kopi 25rb pake Gopay" → EXPENSE, amount: 25000, wallet: Gopay
         - "Transfer 50rb BCA ke OVO" → TRANSFER, wallet: BCA, target: OVO
         - "Tarik tunai 500rb dari BCA" → TRANSFER, wallet: BCA, target: Cash
+        - "Nabung 500rb dari BCA ke tabungan" → TRANSFER, category: Savings, wallet: BCA, target: Tabungan
+        - "Setor RDN 2jt dari BCA" → TRANSFER, category: Investment, wallet: BCA, target: RDN
+        - "Transfer 1jt ke tabungan bersama Sari dari BCA" → EXPENSE, category: Joint Savings, wallet: BCA
         - "Pinjam 100k dari Budi" → BORROW, INCOME, counterparty: Budi
         - "Bayar hutang ke Sari 50k" → PAY, EXPENSE, counterparty: Sari
         """

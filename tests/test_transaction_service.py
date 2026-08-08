@@ -38,6 +38,8 @@ class FakeRepo:
         }
         self.created_transaction = None
         self.created_category = None
+        self.categories = {}
+        self.transactions = []
 
     async def get_wallet_by_name(self, user_id, name):
         return next(
@@ -61,18 +63,39 @@ class FakeRepo:
 
     async def get_wallet_balance(self, wallet_id, user_id):
         wallet = next(wallet for wallet in self.wallets.values() if wallet.id == wallet_id)
-        return wallet.initial_balance
+        balance = wallet.initial_balance
+        for transaction in self.transactions:
+            if transaction["wallet_id"] == wallet_id:
+                if transaction["type"] == "income":
+                    balance += transaction["amount"]
+                elif transaction["type"] == "expense":
+                    balance -= transaction["amount"]
+                elif transaction["type"] == "transfer":
+                    balance -= transaction["amount"]
+
+            if transaction.get("target_wallet_id") == wallet_id and transaction["type"] == "transfer":
+                balance += transaction["amount"]
+        return balance
 
     async def get_category_by_name(self, user_id, name, category_type):
-        return None
+        return self.categories.get((name.lower(), category_type))
 
     async def create_category(self, user_id, name, category_type):
-        self.created_category = SimpleNamespace(id=1, name=name, type=category_type)
-        return SimpleNamespace(id=1, name=name)
+        category = SimpleNamespace(id=len(self.categories) + 1, name=name, type=category_type)
+        self.categories[(name.lower(), category_type)] = category
+        self.created_category = category
+        return category
 
     async def create_transaction(self, **kwargs):
         self.created_transaction = kwargs
-        return SimpleNamespace(id=1)
+        self.transactions.append(kwargs)
+        return SimpleNamespace(id=len(self.transactions))
+
+    async def get_total_assets(self, user_id):
+        total = 0
+        for wallet in self.wallets.values():
+            total += await self.get_wallet_balance(wallet.id, user_id)
+        return total
 
 
 class TestCashWithdrawal:
@@ -201,3 +224,82 @@ class TestSimpleCategories:
 
         assert "Transaksi Tercatat" in result
         assert repo.created_category.name == "Other"
+
+
+class SavingsInvestmentLLM:
+    async def parse_transaction(self, text):
+        return {
+            "amount": 1,
+            "category": "Other",
+            "wallet_name": "BCA",
+            "target_wallet_name": None,
+            "description": text[:50],
+            "transaction_type": "EXPENSE",
+            "debt_action": "NONE",
+            "counterparty_name": None,
+        }
+
+
+class TestSavingsAndInvestmentModel:
+    async def test_personal_savings_defaults_to_transfer_to_tabungan(self):
+        repo = FakeRepo()
+        repo.wallets["BCA"].initial_balance = 1_000_000
+        service = TransactionService(SavingsInvestmentLLM(), repo)
+
+        before_assets = await repo.get_total_assets(123)
+        result = await service.process_natural_language(123, "nabung 500rb")
+        after_assets = await repo.get_total_assets(123)
+
+        assert "🔄" in result
+        assert "Tabungan" in repo.wallets
+        assert repo.created_transaction["type"] == "transfer"
+        assert repo.created_transaction["amount"] == 500_000
+        assert repo.created_transaction["target_wallet_id"] == repo.wallets["Tabungan"].id
+        assert repo.created_category.name == "Savings"
+        assert before_assets == after_assets
+
+    async def test_rdn_deposit_is_investment_transfer_to_rdn(self):
+        repo = FakeRepo()
+        repo.wallets["BCA"].initial_balance = 3_000_000
+        service = TransactionService(SavingsInvestmentLLM(), repo)
+
+        before_assets = await repo.get_total_assets(123)
+        result = await service.process_natural_language(123, "setor RDN 2jt dari BCA")
+        after_assets = await repo.get_total_assets(123)
+
+        assert "🔄" in result
+        assert "RDN" in repo.wallets
+        assert repo.created_transaction["type"] == "transfer"
+        assert repo.created_transaction["target_wallet_id"] == repo.wallets["RDN"].id
+        assert repo.created_category.name == "Investment"
+        assert before_assets == after_assets
+
+    async def test_stock_investment_without_target_uses_investasi_wallet(self):
+        repo = FakeRepo()
+        service = TransactionService(SavingsInvestmentLLM(), repo)
+
+        result = await service.process_natural_language(123, "investasi saham 1jt dari BCA")
+
+        assert "🔄" in result
+        assert "Investasi" in repo.wallets
+        assert repo.created_transaction["type"] == "transfer"
+        assert repo.created_transaction["target_wallet_id"] == repo.wallets["Investasi"].id
+        assert repo.created_category.name == "Investment"
+
+    async def test_joint_savings_to_other_person_is_expense(self):
+        repo = FakeRepo()
+        repo.wallets["BCA"].initial_balance = 2_000_000
+        service = TransactionService(SavingsInvestmentLLM(), repo)
+
+        before_assets = await repo.get_total_assets(123)
+        result = await service.process_natural_language(
+            123,
+            "transfer 1jt ke tabungan bersama Sari dari BCA",
+        )
+        after_assets = await repo.get_total_assets(123)
+
+        assert "🔴" in result
+        assert repo.created_transaction["type"] == "expense"
+        assert repo.created_transaction["target_wallet_id"] is None
+        assert repo.created_category.name == "Joint Savings"
+        assert before_assets - after_assets == 1_000_000

@@ -9,6 +9,7 @@ from app.core.settings import settings
 from app.domain.finance.category_keywords import (
     EXPENSE_CATEGORIES,
     INCOME_CATEGORIES,
+    TRANSFER_CATEGORIES,
     normalize_category,
 )
 from app.domain.llm.ports import LLMPort
@@ -32,16 +33,23 @@ Field wajib:
 Aturan:
 - Untuk EXPENSE, category wajib salah satu dari: {expense_categories}.
 - Untuk INCOME, category wajib salah satu dari: {income_categories}.
+- Untuk TRANSFER, category wajib salah satu dari: {transfer_categories}.
 - Jangan membuat category baru atau terlalu spesifik. Jika tidak cocok, pakai "Other".
 - Liburan/travel/wisata masuk "Other", bukan category baru.
 - Transfer antar-wallet dan tarik tunai adalah TRANSFER, bukan EXPENSE.
 - Tarik tunai memiliki category "Cash Withdrawal" dan target_wallet_name "Cash".
+- Tabungan pribadi/nabung adalah TRANSFER category "Savings" ke target_wallet_name "Tabungan".
+- RDN, saham, reksadana, Stockbit, Ajaib, crypto/kripto adalah TRANSFER category "Investment".
+- Setor RDN adalah TRANSFER ke target_wallet_name "RDN".
+- Investasi saham/reksadana tanpa target eksplisit adalah TRANSFER ke target_wallet_name "Investasi".
+- Tabungan bersama/patungan/setoran bersama/iuran tabungan ke orang lain adalah EXPENSE category "Joint Savings".
 - Pinjam dari seseorang: BORROW dan INCOME.
 - Meminjamkan ke seseorang: LEND dan EXPENSE.
 - Bayar hutang: PAY dan EXPENSE.
 """.format(
     expense_categories=", ".join(EXPENSE_CATEGORIES),
     income_categories=", ".join(INCOME_CATEGORIES),
+    transfer_categories=", ".join(TRANSFER_CATEGORIES),
 ).strip()
 
 

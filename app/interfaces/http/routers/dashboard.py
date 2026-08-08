@@ -33,6 +33,8 @@ bearer_scheme = HTTPBearer(auto_error=False)
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7
 OTP_TTL_SECONDS = 60 * 5
 JWT_ALGORITHM = "HS256"
+ASSET_ALLOCATION_CATEGORIES = ("Savings", "Investment")
+JOINT_SAVINGS_CATEGORY = "Joint Savings"
 
 
 class DashboardTokenResponse(BaseModel):
@@ -249,6 +251,61 @@ async def get_dashboard_summary(
     ).where(*filters)
     total_income, total_expense, transaction_count = (await session.execute(totals_stmt)).one()
 
+    allocation_stmt = (
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                TrsTransaction.type == "transfer",
+                                MstCategory.name == "Savings",
+                            ),
+                            TrsTransaction.amount,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                TrsTransaction.type == "transfer",
+                                MstCategory.name == "Investment",
+                            ),
+                            TrsTransaction.amount,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                TrsTransaction.type == "expense",
+                                MstCategory.name == JOINT_SAVINGS_CATEGORY,
+                            ),
+                            TrsTransaction.amount,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+        )
+        .select_from(TrsTransaction)
+        .outerjoin(MstCategory, TrsTransaction.category_id == MstCategory.id)
+        .where(*filters)
+    )
+    total_savings, total_investment, total_joint_savings = (await session.execute(allocation_stmt)).one()
+    total_asset_allocation = float(total_savings) + float(total_investment)
+
     debt_stmt = select(
         func.coalesce(func.sum(case((TrsDebt.direction == "I_OWE", TrsDebt.amount), else_=0)), 0),
         func.coalesce(func.sum(case((TrsDebt.direction == "THEY_OWE", TrsDebt.amount), else_=0)), 0),
@@ -265,7 +322,12 @@ async def get_dashboard_summary(
         "period": {"start_date": start_date, "end_date": end_date},
         "total_income": float(total_income),
         "total_expense": float(total_expense),
+        "total_joint_savings": float(total_joint_savings),
+        "total_savings": float(total_savings),
+        "total_investment": float(total_investment),
+        "total_asset_allocation": total_asset_allocation,
         "net_cashflow": float(total_income) - float(total_expense),
+        "net_after_asset_allocation": float(total_income) - float(total_expense) - total_asset_allocation,
         "wallet_balance": wallet_balance,
         "pending_debt": float(total_debt),
         "pending_receivable": float(total_receivable),
@@ -287,7 +349,54 @@ async def get_cashflow_chart(
             bucket.label("period"),
             func.coalesce(func.sum(case((TrsTransaction.type == "income", TrsTransaction.amount), else_=0)), 0).label("income"),
             func.coalesce(func.sum(case((TrsTransaction.type == "expense", TrsTransaction.amount), else_=0)), 0).label("expense"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                TrsTransaction.type == "expense",
+                                MstCategory.name == JOINT_SAVINGS_CATEGORY,
+                            ),
+                            TrsTransaction.amount,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("joint_savings"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                TrsTransaction.type == "transfer",
+                                MstCategory.name == "Savings",
+                            ),
+                            TrsTransaction.amount,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("savings"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                TrsTransaction.type == "transfer",
+                                MstCategory.name == "Investment",
+                            ),
+                            TrsTransaction.amount,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("investment"),
         )
+        .select_from(TrsTransaction)
+        .outerjoin(MstCategory, TrsTransaction.category_id == MstCategory.id)
         .where(
             TrsTransaction.owner_telegram_user_id == current_user.id,
             *_date_filter(start_date, end_date),
@@ -304,7 +413,17 @@ async def get_cashflow_chart(
                 "period": row.period.isoformat(),
                 "income": float(row.income),
                 "expense": float(row.expense),
+                "joint_savings": float(row.joint_savings),
+                "savings": float(row.savings),
+                "investment": float(row.investment),
+                "asset_allocation": float(row.savings) + float(row.investment),
                 "net": float(row.income) - float(row.expense),
+                "net_after_asset_allocation": (
+                    float(row.income)
+                    - float(row.expense)
+                    - float(row.savings)
+                    - float(row.investment)
+                ),
             }
             for row in rows
         ],
@@ -337,6 +456,48 @@ async def get_expenses_by_category_chart(
     return {
         "chart": "donut",
         "items": [{"category": row.category, "amount": float(row.amount)} for row in rows],
+    }
+
+
+@router.get("/charts/asset-allocation")
+async def get_asset_allocation_chart(
+    start_date: Optional[date] = Query(default=None),
+    end_date: Optional[date] = Query(default=None),
+    current_user: SysTelegramUser = Depends(get_current_dashboard_user),
+    session: AsyncSession = Depends(get_db),
+):
+    target_wallet = aliased(MstWallet)
+    stmt = (
+        select(
+            MstCategory.name.label("category"),
+            func.coalesce(target_wallet.name, "Unknown").label("target_wallet"),
+            func.coalesce(func.sum(TrsTransaction.amount), 0).label("amount"),
+        )
+        .select_from(TrsTransaction)
+        .join(MstCategory, TrsTransaction.category_id == MstCategory.id)
+        .outerjoin(target_wallet, TrsTransaction.target_wallet_id == target_wallet.id)
+        .where(
+            TrsTransaction.owner_telegram_user_id == current_user.id,
+            TrsTransaction.type == "transfer",
+            MstCategory.name.in_(ASSET_ALLOCATION_CATEGORIES),
+            *_date_filter(start_date, end_date),
+        )
+        .group_by(MstCategory.name, target_wallet.name)
+        .order_by(func.sum(TrsTransaction.amount).desc())
+    )
+    rows = (await session.execute(stmt)).all()
+    total = sum(float(row.amount) for row in rows)
+    return {
+        "chart": "donut",
+        "items": [
+            {
+                "category": row.category,
+                "target_wallet": row.target_wallet,
+                "amount": float(row.amount),
+            }
+            for row in rows
+        ],
+        "total": total,
     }
 
 

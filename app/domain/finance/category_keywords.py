@@ -15,6 +15,7 @@ EXPENSE_CATEGORIES: tuple[str, ...] = (
     "Health",
     "Entertainment",
     "Education",
+    "Joint Savings",
     "Other",
 )
 
@@ -29,6 +30,8 @@ INCOME_CATEGORIES: tuple[str, ...] = (
 TRANSFER_CATEGORIES: tuple[str, ...] = (
     "Transfer",
     "Cash Withdrawal",
+    "Savings",
+    "Investment",
 )
 
 # category -> keywords that strongly imply that category (lowercase)
@@ -56,6 +59,9 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     ],
     "Education": [
         "sekolah", "kuliah", "kursus", "buku", "kelas",
+    ],
+    "Joint Savings": [
+        "tabungan bersama", "patungan", "setoran bersama", "iuran tabungan",
     ],
 }
 
@@ -85,6 +91,11 @@ CATEGORY_ALIASES: dict[str, str] = {
     "hiburan": "Entertainment",
     "education": "Education",
     "pendidikan": "Education",
+    "joint savings": "Joint Savings",
+    "tabungan bersama": "Joint Savings",
+    "patungan": "Joint Savings",
+    "setoran bersama": "Joint Savings",
+    "iuran tabungan": "Joint Savings",
     "salary": "Salary",
     "gaji": "Salary",
     "bonus": "Bonus",
@@ -97,6 +108,20 @@ CATEGORY_ALIASES: dict[str, str] = {
     "transfer": "Transfer",
     "cash withdrawal": "Cash Withdrawal",
     "tarik tunai": "Cash Withdrawal",
+    "savings": "Savings",
+    "saving": "Savings",
+    "tabungan": "Savings",
+    "nabung": "Savings",
+    "investment": "Investment",
+    "investasi": "Investment",
+    "rdn": "Investment",
+    "saham": "Investment",
+    "reksadana": "Investment",
+    "rekasadana": "Investment",
+    "stockbit": "Investment",
+    "ajaib": "Investment",
+    "crypto": "Investment",
+    "kripto": "Investment",
     "lain-lain": "Other",
     "lain lain": "Other",
     "other": "Other",
@@ -125,6 +150,13 @@ WALLET_KEYWORDS: dict[str, str] = {
     "seabank": "Seabank",
     "jenius": "Jenius",
     "linkaja": "LinkAja",
+    "tabungan": "Tabungan",
+    "rdn": "RDN",
+    "stockbit": "Stockbit",
+    "ajaib": "Ajaib",
+    "investasi": "Investasi",
+    "crypto": "Crypto",
+    "kripto": "Crypto",
 }
 
 

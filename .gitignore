@@ -11,4 +11,5 @@ wheels/
 .env
 cloudflared/
 docker-compose*.yml
-docs/
+docs/*
+!docs/dashboard-savings-investment-api.md

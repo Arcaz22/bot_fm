@@ -30,6 +30,38 @@ BALANCE_SETUP_KEYWORDS = (
     "import saldo",
 )
 
+JOINT_SAVINGS_KEYWORDS = (
+    "tabungan bersama",
+    "patungan",
+    "setoran bersama",
+    "iuran tabungan",
+)
+PERSONAL_SAVINGS_KEYWORDS = (
+    "nabung",
+    "menabung",
+    "tabungan pribadi",
+    "ke tabungan",
+    "masuk tabungan",
+)
+INVESTMENT_KEYWORDS = (
+    "investasi",
+    "rdn",
+    "saham",
+    "reksadana",
+    "rekasadana",
+    "stockbit",
+    "ajaib",
+    "crypto",
+    "kripto",
+)
+INVESTMENT_TARGETS = (
+    ("rdn", "RDN"),
+    ("stockbit", "stockbit"),
+    ("ajaib", "Ajaib"),
+    ("crypto", "Crypto"),
+    ("kripto", "Crypto"),
+)
+
 
 def _clean_counterparty_name(name: str) -> str:
     cleaned = re.sub(
@@ -130,6 +162,89 @@ def _extract_balance_setup(text: str) -> tuple[str, float] | None:
         return wallet_name, amount
 
     return None
+
+
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)
+
+
+def _extract_source_wallet(text: str) -> str | None:
+    text_lower = text.lower()
+    source_match = re.search(r'\b(?:dari|from)\s+([a-zA-Z0-9][\w .+-]{0,40})', text_lower)
+    if source_match:
+        source_text = source_match.group(1)
+        source_text = re.split(r'\b(?:ke|untuk|buat|via|pakai|pake)\b', source_text, maxsplit=1)[0]
+        source_wallet = category_keywords.guess_wallet(source_text)
+        if source_wallet:
+            return source_wallet
+
+    return None
+
+
+def _extract_transfer_target(text: str) -> str | None:
+    text_lower = text.lower()
+    target_match = re.search(r'\b(?:ke|to|menuju)\s+([a-zA-Z0-9][\w .+-]{0,40})', text_lower)
+    if not target_match:
+        return None
+
+    target_text = target_match.group(1)
+    target_text = re.split(r'\b(?:dari|untuk|buat|via|pakai|pake)\b', target_text, maxsplit=1)[0]
+    return category_keywords.guess_wallet(target_text)
+
+
+def _investment_target(text: str) -> str:
+    text_lower = text.lower()
+    explicit_target = _extract_transfer_target(text)
+    if explicit_target and explicit_target not in {"Tabungan"}:
+        return explicit_target
+
+    for keyword, wallet_name in INVESTMENT_TARGETS:
+        if keyword in text_lower:
+            return wallet_name
+
+    return "Investasi"
+
+
+def _apply_asset_allocation_rules(data: ExtractedTransaction, text: str) -> None:
+    source_wallet = _extract_source_wallet(text)
+
+    if _contains_any(text, JOINT_SAVINGS_KEYWORDS):
+        data.transaction_type = "EXPENSE"
+        data.category = "Joint Savings"
+        data.target_wallet_name = None
+        data.debt_action = "NONE"
+        data.counterparty_name = None
+        if source_wallet:
+            data.wallet_name = source_wallet
+        elif rules.normalize_wallet_name(data.wallet_name) in {"Tabungan", "RDN", "Investasi"}:
+            data.wallet_name = "BCA"
+        return
+
+    if _contains_any(text, INVESTMENT_KEYWORDS):
+        target_wallet_name = _investment_target(text)
+        data.transaction_type = "TRANSFER"
+        data.category = "Investment"
+        data.target_wallet_name = target_wallet_name
+        data.debt_action = "NONE"
+        data.counterparty_name = None
+        if source_wallet:
+            data.wallet_name = source_wallet
+        elif rules.normalize_wallet_name(data.wallet_name) == rules.normalize_wallet_name(target_wallet_name):
+            data.wallet_name = "BCA"
+        return
+
+    if _contains_any(text, PERSONAL_SAVINGS_KEYWORDS):
+        target_wallet_name = _extract_transfer_target(text) or "Tabungan"
+        data.transaction_type = "TRANSFER"
+        data.category = "Savings"
+        data.target_wallet_name = target_wallet_name
+        data.debt_action = "NONE"
+        data.counterparty_name = None
+        if source_wallet:
+            data.wallet_name = source_wallet
+        elif rules.normalize_wallet_name(data.wallet_name) == rules.normalize_wallet_name(target_wallet_name):
+            data.wallet_name = "BCA"
 
 
 # Keywords that signal the message is NOT a simple single-wallet expense.
@@ -253,6 +368,8 @@ class TransactionService:
 
                 if rules.normalize_wallet_name(data.wallet_name) == "Cash":
                     data.wallet_name = "BCA"
+
+            _apply_asset_allocation_rules(data, text)
 
             # Fallback wallet default jika tidak ada wallet_name
             if not getattr(data, "wallet_name", None):
