@@ -21,6 +21,7 @@ from app.interfaces.http.routers.subscription import router as subscription_rout
 from app.interfaces.http.routers.membership import router as membership_router
 from app.interfaces.http.routers.langfuse import router as langfuse_router
 from app.interfaces.http.routers.payment import router as payment_router
+from app.interfaces.http.routers.legal import router as legal_router
 
 from app.core.logging import setup_logging
 
@@ -76,6 +77,7 @@ app.include_router(subscription_router)
 app.include_router(membership_router)
 app.include_router(langfuse_router)
 app.include_router(payment_router)
+app.include_router(legal_router)
 
 @app.get("/")
 async def root():
