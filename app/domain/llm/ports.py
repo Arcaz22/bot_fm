@@ -11,3 +11,6 @@ class LLMPort(Protocol):
         include_usage: bool = False,
     ) -> dict:
         ...
+
+    async def parse_subscription_email(self, email: dict, include_usage: bool = False) -> dict:
+        ...

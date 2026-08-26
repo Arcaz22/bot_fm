@@ -107,6 +107,40 @@ def shutdown_langfuse_client() -> None:
         client.shutdown()
 
 
+def _normalize_subscription_email_result(data: Dict[str, Any]) -> Dict[str, Any]:
+    billing_period = data.get("billing_period") or "unknown"
+    if billing_period not in {"monthly", "yearly", "weekly", "one_time", "unknown"}:
+        billing_period = "unknown"
+
+    status = data.get("status") or "unknown"
+    if status not in {"active", "cancelled", "trial", "failed_payment", "unknown"}:
+        status = "unknown"
+
+    amount = data.get("amount")
+    if not isinstance(amount, (int, float)):
+        amount = None
+
+    confidence = data.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        confidence = 0
+
+    return {
+        "is_subscription": bool(data.get("is_subscription")),
+        "confidence": max(0, min(float(confidence), 1)),
+        "merchant_name": data.get("merchant_name"),
+        "plan_name": data.get("plan_name"),
+        "amount": amount,
+        "currency": data.get("currency"),
+        "billing_period": billing_period,
+        "billing_date": data.get("billing_date"),
+        "next_billing_date": data.get("next_billing_date"),
+        "payment_method": data.get("payment_method"),
+        "status": status,
+        "evidence": data.get("evidence") or "unknown",
+        "reason": data.get("reason") or "",
+    }
+
+
 class GeminiLLM(LLMPort):
     def __init__(self, model_name: str = "gemini-2.5-flash"):
         if not settings.GOOGLE_API_KEY:
@@ -306,6 +340,74 @@ class GeminiLLM(LLMPort):
         except Exception as e:
             logger.error(f"Gemini Error: {type(e).__name__} - {e}")
             raise
+
+    async def parse_subscription_email(
+        self,
+        email: dict,
+        include_usage: bool = False,
+    ) -> Dict[str, Any]:
+        system_prompt = """
+        Ekstrak informasi langganan dari email berikut. Balas hanya JSON object valid.
+
+        Aturan:
+        - is_subscription true hanya jika email berisi invoice, receipt, renewal,
+          payment confirmation, trial converting to paid, atau subscription billing.
+        - Email promo, newsletter, login alert, OTP, diskon, dan rekomendasi produk bukan langganan.
+        - amount wajib angka penuh tanpa simbol atau pemisah ribuan.
+        - billing_period hanya: monthly, yearly, weekly, one_time, unknown.
+        - status hanya: active, cancelled, trial, failed_payment, unknown.
+        - Jika field tidak ada, isi null atau unknown.
+
+        Schema wajib:
+        {
+          "is_subscription": boolean,
+          "confidence": number,
+          "merchant_name": string|null,
+          "plan_name": string|null,
+          "amount": number|null,
+          "currency": string|null,
+          "billing_period": "monthly"|"yearly"|"weekly"|"one_time"|"unknown",
+          "billing_date": "YYYY-MM-DD"|null,
+          "next_billing_date": "YYYY-MM-DD"|null,
+          "payment_method": string|null,
+          "status": "active"|"cancelled"|"trial"|"failed_payment"|"unknown",
+          "evidence": string,
+          "reason": string
+        }
+        """
+        prompt = (
+            f"{system_prompt}\n\n"
+            f"Email:\n"
+            f"Subject: {email.get('subject') or ''}\n"
+            f"From: {email.get('sender') or ''}\n"
+            f"Date: {email.get('date') or ''}\n"
+            f"Snippet/Body: {(email.get('body') or email.get('snippet') or '')[:4000]}"
+        )
+
+        usage: Dict[str, int] = {}
+        try:
+            with self._observe_generation(
+                name="gemini.parse_subscription_email",
+                input=prompt,
+                model_parameters=self.generation_parameters,
+                metadata={"operation": "parse_subscription_email"},
+            ) as generation:
+                response = await self.model.generate_content_async(prompt)
+                usage = self._record_response(generation, response)
+
+            parsed = json.loads(response.text.strip())
+            data = _normalize_subscription_email_result(parsed)
+            return self._result_with_usage(data, usage, include_usage)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON Decode Error: {e}")
+            data = _normalize_subscription_email_result({})
+            data["reason"] = "Gagal parse format JSON dari AI"
+            return self._result_with_usage(data, usage, include_usage)
+        except genai.types.BlockedPromptException as e:
+            logger.warning(f"Prompt subscription diblokir oleh Gemini safety filter: {e}")
+            data = _normalize_subscription_email_result({})
+            data["reason"] = "Konten tidak dapat diproses oleh AI"
+            return self._result_with_usage(data, usage, include_usage)
 
     async def parse_receipt_image(
         self,

@@ -164,3 +164,32 @@ class MockLLM(LLMPort):
         if include_usage:
             return {"data": result, "usage": {}, "model": "mock"}
         return result
+
+    async def parse_subscription_email(
+        self,
+        email: dict,
+        include_usage: bool = False,
+    ) -> Dict[str, Any]:
+        text = f"{email.get('subject') or ''} {email.get('snippet') or ''} {email.get('body') or ''}".lower()
+        is_subscription = any(
+            keyword in text
+            for keyword in ["invoice", "receipt", "billing", "renewal", "subscription", "tagihan", "langganan"]
+        )
+        result = {
+            "is_subscription": is_subscription,
+            "confidence": 0.85 if is_subscription else 0.2,
+            "merchant_name": "Mock Merchant" if is_subscription else None,
+            "plan_name": None,
+            "amount": 99000 if is_subscription else None,
+            "currency": "IDR" if is_subscription else None,
+            "billing_period": "monthly" if is_subscription else "unknown",
+            "billing_date": None,
+            "next_billing_date": None,
+            "payment_method": None,
+            "status": "active" if is_subscription else "unknown",
+            "evidence": "mock",
+            "reason": "Mock subscription detection",
+        }
+        if include_usage:
+            return {"data": result, "usage": {}, "model": "mock"}
+        return result

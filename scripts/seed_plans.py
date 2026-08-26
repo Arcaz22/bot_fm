@@ -10,6 +10,12 @@ Sesuaikan feature_key di sini dengan yang benar-benar dicek di kode,
 supaya tidak ada typo yang bikin limit tidak pernah kebaca.
 """
 import asyncio
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from sqlalchemy import select
 
@@ -34,18 +40,26 @@ PLANS = [
 # --- Definisi limit fitur per plan code ---
 # limit_value=None berarti unlimited.
 # limit_period sekarang "monthly" (sebelumnya "daily") sesuai dokumen strategi.
+# Untuk feature_key *_limit, limit_period=None karena nilainya adalah batas
+# konfigurasi plan, bukan kuota pemakaian periodik.
 PLAN_FEATURES = {
     "free": [
         {"feature_key": "ai_parse_transaction", "limit_value": 25, "limit_period": "monthly"},
         {"feature_key": "receipt_scan", "limit_value": 5, "limit_period": "monthly"},
+        {"feature_key": "subscription_email_scan", "limit_value": 0, "limit_period": None},
+        {"feature_key": "subscription_email_account_limit", "limit_value": 0, "limit_period": None},
     ],
     "pro": [
         {"feature_key": "ai_parse_transaction", "limit_value": 150, "limit_period": "monthly"},
         {"feature_key": "receipt_scan", "limit_value": 50, "limit_period": "monthly"},
+        {"feature_key": "subscription_email_scan", "limit_value": 1, "limit_period": "monthly"},
+        {"feature_key": "subscription_email_account_limit", "limit_value": 1, "limit_period": None},
     ],
     "premium": [
         {"feature_key": "ai_parse_transaction", "limit_value": None, "limit_period": None},
         {"feature_key": "receipt_scan", "limit_value": None, "limit_period": None},
+        {"feature_key": "subscription_email_scan", "limit_value": None, "limit_period": None},
+        {"feature_key": "subscription_email_account_limit", "limit_value": 3, "limit_period": None},
     ],
 }
 

@@ -69,6 +69,38 @@ jumlahkan seluruh item. Harga item adalah harga per unit.
 """.strip()
 
 
+SUBSCRIPTION_EMAIL_PROMPT = """
+Ekstrak informasi langganan dari email berikut. Balas hanya JSON object valid.
+
+Aturan:
+- is_subscription true hanya jika email berisi invoice, receipt, renewal,
+  payment confirmation, trial converting to paid, atau subscription billing.
+- Email promo, newsletter, login alert, OTP, diskon, dan rekomendasi produk bukan langganan.
+- amount wajib angka penuh tanpa Rp/titik/koma.
+- billing_period hanya: monthly, yearly, weekly, one_time, unknown.
+- status hanya: active, cancelled, trial, failed_payment, unknown.
+- Jika field tidak ada, isi null atau unknown.
+- Jangan menebak terlalu jauh. Jika ragu, confidence rendah.
+
+Schema wajib:
+{
+  "is_subscription": boolean,
+  "confidence": number,
+  "merchant_name": string|null,
+  "plan_name": string|null,
+  "amount": number|null,
+  "currency": string|null,
+  "billing_period": "monthly"|"yearly"|"weekly"|"one_time"|"unknown",
+  "billing_date": "YYYY-MM-DD"|null,
+  "next_billing_date": "YYYY-MM-DD"|null,
+  "payment_method": string|null,
+  "status": "active"|"cancelled"|"trial"|"failed_payment"|"unknown",
+  "evidence": string,
+  "reason": string
+}
+""".strip()
+
+
 class OllamaLLM(LLMPort):
     """LLM lokal melalui Ollama: model teks dan vision dapat dikonfigurasi terpisah."""
 
@@ -197,3 +229,59 @@ class OllamaLLM(LLMPort):
                 "items": [],
             }
             return self._with_usage(data, {}, self.vision_model, include_usage)
+
+    async def parse_subscription_email(
+        self,
+        email: dict,
+        include_usage: bool = False,
+    ) -> Dict[str, Any]:
+        prompt = (
+            f"{SUBSCRIPTION_EMAIL_PROMPT}\n\n"
+            f"Email:\n"
+            f"Subject: {email.get('subject') or ''}\n"
+            f"From: {email.get('sender') or ''}\n"
+            f"Date: {email.get('date') or ''}\n"
+            f"Snippet/Body: {(email.get('body') or email.get('snippet') or '')[:4000]}"
+        )
+        try:
+            data, usage = await self._chat(model=self.text_model, prompt=prompt)
+            return self._with_usage(_normalize_subscription_result(data), usage, self.text_model, include_usage)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("Respons JSON Ollama subscription tidak valid: %s", exc)
+            data = _normalize_subscription_result({})
+            data["reason"] = "Gagal parse format JSON dari Ollama"
+            return self._with_usage(data, {}, self.text_model, include_usage)
+
+
+def _normalize_subscription_result(data: Dict[str, Any]) -> Dict[str, Any]:
+    billing_period = data.get("billing_period") or "unknown"
+    if billing_period not in {"monthly", "yearly", "weekly", "one_time", "unknown"}:
+        billing_period = "unknown"
+
+    status = data.get("status") or "unknown"
+    if status not in {"active", "cancelled", "trial", "failed_payment", "unknown"}:
+        status = "unknown"
+
+    amount = data.get("amount")
+    if not isinstance(amount, (int, float)):
+        amount = None
+
+    confidence = data.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        confidence = 0
+
+    return {
+        "is_subscription": bool(data.get("is_subscription")),
+        "confidence": max(0, min(float(confidence), 1)),
+        "merchant_name": data.get("merchant_name"),
+        "plan_name": data.get("plan_name"),
+        "amount": amount,
+        "currency": data.get("currency"),
+        "billing_period": billing_period,
+        "billing_date": data.get("billing_date"),
+        "next_billing_date": data.get("next_billing_date"),
+        "payment_method": data.get("payment_method"),
+        "status": status,
+        "evidence": data.get("evidence") or "unknown",
+        "reason": data.get("reason") or "",
+    }

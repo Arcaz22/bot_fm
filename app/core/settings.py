@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     # Upgrade ke plan berbayar dilakukan lewat dashboard, bukan lewat bot ini.
     DEFAULT_FREE_PLAN_CODE: str
 
+    # --- Subscription Email Scanner ---
+    GMAIL_OAUTH_CLIENT_ID: str | None = None
+    GMAIL_OAUTH_CLIENT_SECRET: str | None = None
+    GMAIL_OAUTH_REDIRECT_URI: str | None = None
+    GMAIL_OAUTH_SCOPES: str = "https://www.googleapis.com/auth/gmail.readonly"
+    SUBSCRIPTION_TOKEN_ENCRYPTION_KEY: str | None = None
+    SUBSCRIPTION_SCAN_MAX_EMAILS: int = 10
+
     # --- Midtrans ---
     MIDTRANS_SERVER_KEY: str
     MIDTRANS_CLIENT_KEY: str

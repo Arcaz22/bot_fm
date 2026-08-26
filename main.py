@@ -17,6 +17,7 @@ from app.interfaces.http.routers.telegram_webhook import router as telegram_rout
 from app.interfaces.http.routers.receipt import router as receipt_router
 from app.interfaces.http.routers.debt import router as debt_router
 from app.interfaces.http.routers.dashboard import router as dashboard_router
+from app.interfaces.http.routers.subscription import router as subscription_router
 from app.interfaces.http.routers.membership import router as membership_router
 from app.interfaces.http.routers.langfuse import router as langfuse_router
 from app.interfaces.http.routers.payment import router as payment_router
@@ -71,6 +72,7 @@ app.include_router(telegram_router)
 app.include_router(receipt_router)
 app.include_router(debt_router)
 app.include_router(dashboard_router)
+app.include_router(subscription_router)
 app.include_router(membership_router)
 app.include_router(langfuse_router)
 app.include_router(payment_router)

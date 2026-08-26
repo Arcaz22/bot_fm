@@ -43,6 +43,18 @@ class SysTelegramUser(Base):
     payments: Mapped[List["MbrPayment"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
     )
+    subscription_email_accounts: Mapped[List["SubEmailAccount"]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
+    subscription_detections: Mapped[List["SubDetection"]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
+    managed_subscriptions: Mapped[List["SubSubscription"]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
+    subscription_payments: Mapped[List["SubPayment"]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<User {self.id} - {self.first_name}>"
@@ -374,3 +386,210 @@ class MbrPayment(Base):
 
     def __repr__(self):
         return f"<MbrPayment {self.id} owner={self.owner_telegram_user_id} status={self.status}>"
+
+
+# =====================================================================
+# Subscription scanner (email account, detection, managed subscription)
+# =====================================================================
+
+class SubEmailAccount(Base):
+    """Email account yang terhubung untuk scan langganan."""
+
+    __tablename__ = "subscription_email_account"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_telegram_user_id", "provider", "email_address",
+            name="uq_subscription_email_account_owner_provider_email",
+        ),
+        CheckConstraint("provider IN ('google','microsoft')", name="ck_sub_email_provider"),
+        CheckConstraint(
+            "status IN ('connected','syncing','needs_reauth','disconnected','error')",
+            name="ck_sub_email_status",
+        ),
+        Index("idx_sub_email_owner_status", "owner_telegram_user_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    owner_telegram_user_id: Mapped[int] = mapped_column(
+        ForeignKey("sys_telegram_user.id"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(20), default="google")
+    email_address: Mapped[str] = mapped_column(String(255), index=True)
+
+    encrypted_access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    encrypted_refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    scopes: Mapped[Optional[dict]] = mapped_column(JSONB, default={})
+
+    status: Mapped[str] = mapped_column(String(20), default="connected", index=True)
+    last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    sync_cursor: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    owner: Mapped["SysTelegramUser"] = relationship(back_populates="subscription_email_accounts")
+    detections: Mapped[List["SubDetection"]] = relationship(
+        back_populates="email_account", cascade="all, delete-orphan"
+    )
+    subscriptions: Mapped[List["SubSubscription"]] = relationship(back_populates="email_account")
+
+    def __repr__(self):
+        return f"<SubEmailAccount {self.email_address} owner={self.owner_telegram_user_id} status={self.status}>"
+
+
+class SubDetection(Base):
+    """Hasil scan email yang perlu dikonfirmasi user."""
+
+    __tablename__ = "subscription_detection"
+    __table_args__ = (
+        UniqueConstraint(
+            "email_account_id", "source_message_id",
+            name="uq_subscription_detection_email_message",
+        ),
+        CheckConstraint(
+            "status IN ('needs_review','confirmed','ignored','merged')",
+            name="ck_sub_detection_status",
+        ),
+        CheckConstraint(
+            "billing_period IN ('weekly','monthly','yearly','one_time','unknown')",
+            name="ck_sub_detection_billing_period",
+        ),
+        Index("idx_sub_detection_owner_status", "owner_telegram_user_id", "status"),
+        Index("idx_sub_detection_email_status", "email_account_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    owner_telegram_user_id: Mapped[int] = mapped_column(
+        ForeignKey("sys_telegram_user.id"), index=True
+    )
+    email_account_id: Mapped[int] = mapped_column(
+        ForeignKey("subscription_email_account.id"), index=True
+    )
+    source_message_id: Mapped[str] = mapped_column(String(255))
+
+    merchant_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    plan_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    amount: Mapped[Optional[Numeric]] = mapped_column(Numeric(18, 2), nullable=True)
+    currency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    billing_period: Mapped[str] = mapped_column(String(20), default="unknown")
+    billing_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    next_billing_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    payment_method: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    confidence: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 4), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="needs_review", index=True)
+
+    raw_subject: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    raw_sender: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    llm_payload: Mapped[Optional[dict]] = mapped_column(JSONB, default={})
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    owner: Mapped["SysTelegramUser"] = relationship(back_populates="subscription_detections")
+    email_account: Mapped["SubEmailAccount"] = relationship(back_populates="detections")
+
+    def __repr__(self):
+        return f"<SubDetection {self.id} merchant={self.merchant_name} status={self.status}>"
+
+
+class SubSubscription(Base):
+    """Langganan user yang sudah dikonfirmasi atau dibuat manual."""
+
+    __tablename__ = "subscription"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','cancelled','paused','unknown')",
+            name="ck_sub_subscription_status",
+        ),
+        CheckConstraint(
+            "billing_period IN ('weekly','monthly','yearly','one_time','unknown')",
+            name="ck_sub_subscription_billing_period",
+        ),
+        CheckConstraint("source IN ('email_scan','manual')", name="ck_sub_subscription_source"),
+        Index("idx_sub_subscription_owner_status", "owner_telegram_user_id", "status"),
+        Index("idx_sub_subscription_owner_next_billing", "owner_telegram_user_id", "next_billing_date"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    owner_telegram_user_id: Mapped[int] = mapped_column(
+        ForeignKey("sys_telegram_user.id"), index=True
+    )
+    email_account_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("subscription_email_account.id"), nullable=True, index=True
+    )
+
+    merchant_name: Mapped[str] = mapped_column(String(150))
+    plan_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    amount: Mapped[Numeric] = mapped_column(Numeric(18, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), default="IDR")
+    billing_period: Mapped[str] = mapped_column(String(20), default="monthly")
+    next_billing_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    wallet_id: Mapped[Optional[int]] = mapped_column(ForeignKey("mst_wallet.id"), nullable=True)
+    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("mst_category.id"), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    source: Mapped[str] = mapped_column(String(20), default="manual")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    owner: Mapped["SysTelegramUser"] = relationship(back_populates="managed_subscriptions")
+    email_account: Mapped[Optional["SubEmailAccount"]] = relationship(back_populates="subscriptions")
+    wallet: Mapped[Optional["MstWallet"]] = relationship()
+    category: Mapped[Optional["MstCategory"]] = relationship()
+    payments: Mapped[List["SubPayment"]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self):
+        return f"<SubSubscription {self.id} merchant={self.merchant_name} status={self.status}>"
+
+
+class SubPayment(Base):
+    """Riwayat pembayaran untuk satu langganan."""
+
+    __tablename__ = "subscription_payment"
+    __table_args__ = (
+        CheckConstraint("source IN ('email_scan','manual','telegram')", name="ck_sub_payment_source"),
+        Index("idx_sub_payment_owner_paid_at", "owner_telegram_user_id", "paid_at"),
+        Index("idx_sub_payment_subscription_paid_at", "subscription_id", "paid_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    owner_telegram_user_id: Mapped[int] = mapped_column(
+        ForeignKey("sys_telegram_user.id"), index=True
+    )
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("subscription.id"), index=True)
+    transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("trs_transaction.id"), nullable=True, index=True
+    )
+
+    amount: Mapped[Numeric] = mapped_column(Numeric(18, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), default="IDR")
+    paid_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    billing_period_start: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    billing_period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="manual")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    owner: Mapped["SysTelegramUser"] = relationship(back_populates="subscription_payments")
+    subscription: Mapped["SubSubscription"] = relationship(back_populates="payments")
+    transaction: Mapped[Optional["TrsTransaction"]] = relationship()
+
+    def __repr__(self):
+        return f"<SubPayment {self.id} subscription={self.subscription_id} amount={self.amount}>"
