@@ -28,6 +28,7 @@ from app.presentation.schemas.subscription import (
     SubscriptionDetailResponse,
     SubscriptionItem,
     SubscriptionListResponse,
+    SubscriptionPageResponse,
     SubscriptionStatus,
     SubscriptionSummaryResponse,
     SubscriptionUpdateRequest,
@@ -114,6 +115,21 @@ def _payment_item(payment: SubPayment) -> PaymentItem:
         billing_period_end=payment.billing_period_end,
         source=payment.source,
         created_at=payment.created_at,
+    )
+
+
+def _summary_response(active_subscriptions: list[SubSubscription]) -> SubscriptionSummaryResponse:
+    due_until = date.today() + timedelta(days=14)
+    due_soon = [
+        item for item in active_subscriptions
+        if item.next_billing_date and item.next_billing_date <= due_until
+    ]
+    return SubscriptionSummaryResponse(
+        active_count=len(active_subscriptions),
+        monthly_total=sum(_monthly_equivalent(item) for item in active_subscriptions),
+        yearly_total=sum(_yearly_equivalent(item) for item in active_subscriptions),
+        due_soon=[_subscription_item(item) for item in due_soon],
+        trial_ending=[],
     )
 
 
@@ -269,21 +285,7 @@ async def get_subscription_summary(
 ):
     repo = SubscriptionRepo(session)
     active_subscriptions = await repo.list_subscriptions(current_user.id, status="active")
-    due_until = date.today() + timedelta(days=14)
-    due_soon = [
-        item for item in active_subscriptions
-        if item.next_billing_date and item.next_billing_date <= due_until
-    ]
-
-    monthly_total = sum(_monthly_equivalent(item) for item in active_subscriptions)
-    yearly_total = sum(_yearly_equivalent(item) for item in active_subscriptions)
-    return SubscriptionSummaryResponse(
-        active_count=len(active_subscriptions),
-        monthly_total=monthly_total,
-        yearly_total=yearly_total,
-        due_soon=[_subscription_item(item) for item in due_soon],
-        trial_ending=[],
-    )
+    return _summary_response(active_subscriptions)
 
 
 @router.get("", response_model=SubscriptionListResponse)
@@ -304,6 +306,33 @@ async def list_subscriptions(
         due_to=due_to,
     )
     return SubscriptionListResponse(items=[_subscription_item(item) for item in subscriptions])
+
+
+@router.get("/page", response_model=SubscriptionPageResponse)
+async def get_subscription_page(
+    subscription_status: Optional[SubscriptionStatus] = Query(default=None),
+    due_from: Optional[date] = Query(default=None),
+    due_to: Optional[date] = Query(default=None),
+    current_user: SysTelegramUser = Depends(get_current_dashboard_user),
+    session: AsyncSession = Depends(get_db),
+):
+    repo = SubscriptionRepo(session)
+    accounts = await repo.list_email_accounts(current_user.id)
+    needs_review = await repo.list_detections(current_user.id, status="needs_review")
+    subscriptions = await repo.list_subscriptions(
+        current_user.id,
+        status=subscription_status,
+        due_from=due_from,
+        due_to=due_to,
+    )
+    active_subscriptions = await repo.list_subscriptions(current_user.id, status="active")
+
+    return SubscriptionPageResponse(
+        summary=_summary_response(active_subscriptions),
+        email_accounts=[_email_account_item(item) for item in accounts],
+        needs_review=[_detection_item(item) for item in needs_review],
+        subscriptions=[_subscription_item(item) for item in subscriptions],
+    )
 
 
 @router.post("", response_model=SubscriptionItem)

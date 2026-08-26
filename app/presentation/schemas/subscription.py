@@ -161,3 +161,10 @@ class SubscriptionSummaryResponse(BaseModel):
     yearly_total: float
     due_soon: list[SubscriptionItem]
     trial_ending: list[SubscriptionItem]
+
+
+class SubscriptionPageResponse(BaseModel):
+    summary: SubscriptionSummaryResponse
+    email_accounts: list[EmailAccountItem]
+    needs_review: list[DetectionItem]
+    subscriptions: list[SubscriptionItem]
