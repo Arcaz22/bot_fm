@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     TELEGRAM_TOKEN: str
     WEBHOOK_URL: str | None = None
+    DASHBOARD_FRONTEND_URL: str = "https://dashboard-fm-azure.vercel.app"
 
     # --- Database ---
     DATABASE_URL: str = Field(..., alias="DATABASE_URL")

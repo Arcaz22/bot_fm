@@ -1,9 +1,12 @@
 from datetime import date, timedelta
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.settings import settings
 from app.core.di import get_llm_client
 from app.domain.llm.ports import LLMPort
 from app.infrastructure.db.base import get_db
@@ -160,7 +163,7 @@ async def connect_google_email_account(
     return GoogleConnectResponse(auth_url=auth_url)
 
 
-@router.get("/email-accounts/oauth/google/callback", response_model=EmailAccountItem)
+@router.get("/email-accounts/oauth/google/callback")
 async def google_oauth_callback(
     code: str = Query(...),
     state: str = Query(...),
@@ -170,10 +173,10 @@ async def google_oauth_callback(
     try:
         account = await service.handle_google_callback(state=state, code=code)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        return _redirect_to_frontend("error", str(exc))
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-    return _email_account_item(account)
+        return _redirect_to_frontend("error", str(exc))
+    return _redirect_to_frontend("connected", account.email_address)
 
 
 @router.post("/email-accounts/{email_account_id}/resync", response_model=EmailScanResponse)
@@ -451,3 +454,12 @@ def _yearly_equivalent(subscription: SubSubscription) -> float:
     if subscription.billing_period == "yearly":
         return amount
     return 0
+
+
+def _redirect_to_frontend(status: str, message: str) -> RedirectResponse:
+    base_url = (settings.DASHBOARD_FRONTEND_URL or "").rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=500, detail="DASHBOARD_FRONTEND_URL belum dikonfigurasi")
+
+    query = urlencode({"gmail_status": status, "gmail_message": message})
+    return RedirectResponse(f"{base_url}/subscriptions?{query}", status_code=302)
