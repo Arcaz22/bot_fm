@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     GMAIL_OAUTH_REDIRECT_URI: str | None = None
     GMAIL_OAUTH_SCOPES: str = "https://www.googleapis.com/auth/gmail.readonly"
     SUBSCRIPTION_TOKEN_ENCRYPTION_KEY: str | None = None
-    SUBSCRIPTION_SCAN_MAX_EMAILS: int = 10
+    SUBSCRIPTION_SCAN_MAX_EMAILS: int = 3
 
     # --- Midtrans ---
     MIDTRANS_SERVER_KEY: str
