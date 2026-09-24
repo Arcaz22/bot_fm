@@ -7,6 +7,7 @@ from typing import Awaitable, Callable
 from redis.asyncio import Redis
 
 from app.core.settings import settings
+from app.domain.telegram.ports import TelegramNotifier
 from app.presentation.schemas.telegram import Update
 
 logger = logging.getLogger(__name__)
@@ -50,12 +51,15 @@ return 1
 
 
 class TelegramUpdateQueue:
-    def __init__(self, redis: Redis):
+    def __init__(self, redis: Redis, notifier: TelegramNotifier):
         self.redis = redis
+        self.notifier = notifier
         self.ready_queue_key = "telegram:updates:ready"
         self.active_users_key = "telegram:updates:active_users"
         self.dedupe_ttl_seconds = settings.TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS
         self.lock_ttl_seconds = settings.TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS
+        self.max_retries = settings.TELEGRAM_QUEUE_MAX_RETRIES
+        self.dead_letter_key = "telegram:updates:dead_letter"
 
     def _user_queue_key(self, chat_id: int) -> str:
         return f"telegram:updates:user:{chat_id}"
@@ -66,8 +70,11 @@ class TelegramUpdateQueue:
     def _lock_key(self, chat_id: int) -> str:
         return f"telegram:updates:lock:{chat_id}"
 
+    def _attempt_key(self, update_id: int) -> str:
+        return f"telegram:updates:attempts:{update_id}"
+
     async def enqueue(self, update: Update) -> bool:
-        chat_id = self._extract_chat_id(update)
+        chat_id = self.extract_chat_id(update)
         if chat_id is None:
             logger.warning("Telegram update ignored because chat_id is missing: %s", update.model_dump())
             return False
@@ -125,8 +132,39 @@ class TelegramUpdateQueue:
                 try:
                     update = Update.model_validate_json(raw_payload)
                     await handler(update)
+                    await self.redis.delete(self._attempt_key(update.update_id))
                 except Exception:
-                    logger.exception("Failed to process Telegram update for chat_id=%s", chat_id)
+                    update_id = None
+                    try:
+                        update_id = Update.model_validate_json(raw_payload).update_id
+                    except Exception:
+                        pass
+
+                    attempt = 1
+                    if update_id is not None:
+                        attempt = int(await self.redis.incr(self._attempt_key(update_id)))
+                        await self.redis.expire(
+                            self._attempt_key(update_id),
+                            self.dedupe_ttl_seconds,
+                        )
+
+                    if attempt <= self.max_retries:
+                        await self.redis.rpush(queue_key, raw_payload)
+                        logger.exception(
+                            "Failed to process Telegram update for chat_id=%s; retry %s/%s",
+                            chat_id,
+                            attempt,
+                            self.max_retries,
+                        )
+                        await asyncio.sleep(min(2 ** (attempt - 1), 30))
+                    else:
+                        await self.redis.rpush(self.dead_letter_key, raw_payload)
+                        await self._notify_processing_failed(chat_id)
+                        logger.exception(
+                            "Telegram update moved to dead-letter queue: chat_id=%s update_id=%s",
+                            chat_id,
+                            update_id,
+                        )
         finally:
             await self.redis.delete(lock_key)
             await self.redis.eval(
@@ -139,7 +177,7 @@ class TelegramUpdateQueue:
             )
 
     @staticmethod
-    def _extract_chat_id(update: Update) -> int | None:
+    def extract_chat_id(update: Update) -> int | None:
         if update.message:
             return update.message.chat.id
         if update.edited_message:
@@ -147,6 +185,33 @@ class TelegramUpdateQueue:
         if update.callback_query and update.callback_query.message:
             return update.callback_query.message.chat.id
         return None
+
+    async def _notify_processing_failed(self, chat_id: int) -> None:
+        """Notify the user after the update is permanently dead-lettered.
+
+        Notification delivery is best effort: a Telegram API failure must not
+        cause the worker to retry an update that has already reached its retry
+        limit.
+        """
+        try:
+            sent = await self.notifier.send_message(
+                chat_id,
+                "❌ Maaf, pesan Anda gagal diproses setelah beberapa percobaan. "
+                "Silakan coba lagi nanti.",
+                parse_mode="",
+            )
+            if not sent:
+                logger.warning(
+                    "Failed to send permanent Telegram processing failure notification "
+                    "for chat_id=%s",
+                    chat_id,
+                )
+        except Exception:
+            logger.exception(
+                "Error while sending permanent Telegram processing failure notification "
+                "for chat_id=%s",
+                chat_id,
+            )
 
 
 async def close_redis(redis: Redis) -> None:

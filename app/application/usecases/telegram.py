@@ -159,8 +159,11 @@ def _detect_intent(text: str) -> str:
         logger.debug(f"Intent TRANSACTION detected by amount/keyword: '{text}'")
         return "transaction"
 
-    logger.debug(f"Intent HELP detected as non-financial fallback: '{text}'")
-    return "help"
+    # Unknown natural language is more safely delegated to the transaction
+    # parser than rejected as a command. The service has its own deterministic
+    # fallback and clarification response when the input is ambiguous.
+    logger.debug(f"Intent TRANSACTION fallback for natural language: '{text}'")
+    return "transaction"
 
 
 def _get_features_message() -> str:
@@ -397,6 +400,10 @@ class HandleTelegramUpdate:
         if msg.contact:
             logger.info(f"Contact message received from {chat_id}")
             await self._handle_contact(msg, user, chat_id)
+            return
+
+        if not text:
+            await self.notifier.send_message(chat_id, _get_features_message())
             return
 
         if command == "/start":

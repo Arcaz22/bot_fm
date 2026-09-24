@@ -52,7 +52,7 @@ def get_redis_client():
 
 @lru_cache()
 def get_telegram_update_queue():
-    return TelegramUpdateQueue(get_redis_client())
+    return TelegramUpdateQueue(get_redis_client(), get_telegram_client())
 
 # =========================================================
 # 2. REPOSITORIES (Scoped per Request)

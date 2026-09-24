@@ -51,7 +51,7 @@ class TelegramClient:
             return {"ok": False, "error": str(e)}
 
     async def send_message(self, chat_id: int, text: str,
-                           parse_mode: str = None, reply_markup=None) -> bool:
+                           parse_mode: str = "Markdown", reply_markup=None) -> bool:
         msg_id = f"msg_{int(time.time())}"
         self.logger.info(f"[{msg_id}] Preparing message for chat_id: {chat_id}")
         self.logger.debug(f"[{msg_id}] Message content: {text}")
@@ -63,6 +63,23 @@ class TelegramClient:
             data["reply_markup"] = reply_markup
 
         result = await self.post("/sendMessage", data)
+
+        # Dynamic values can contain characters that invalidate Markdown.
+        # Retry as plain text only when Telegram explicitly rejects parsing.
+        if (
+            result
+            and not result.get("ok")
+            and parse_mode
+            and self._is_formatting_error(result)
+        ):
+            self.logger.warning(
+                "Telegram rejected formatted message for chat_id=%s; retrying plain text",
+                chat_id,
+            )
+            plain_data = {"chat_id": chat_id, "text": text}
+            if reply_markup:
+                plain_data["reply_markup"] = reply_markup
+            result = await self.post("/sendMessage", plain_data)
 
         if result and result.get("ok"):
             self.logger.info(
@@ -76,6 +93,17 @@ class TelegramClient:
                 f" {result.get('error', 'Unknown error') if result else 'No response'}"
             )
             return False
+
+    @staticmethod
+    def _is_formatting_error(result: dict) -> bool:
+        description = str(result.get("description") or result.get("error") or "").lower()
+        return (
+            result.get("error_code") == 400
+            and any(
+                term in description
+                for term in ("parse entities", "can't parse", "markdown")
+            )
+        )
 
     async def get_file(self, file_id: str) -> Optional[str]:
         """Dapatkan file_path dari Telegram API berdasarkan file_id."""

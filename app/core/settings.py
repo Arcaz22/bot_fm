@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     TELEGRAM_TOKEN: str
     WEBHOOK_URL: str | None = None
+    TELEGRAM_WEBHOOK_SECRET: str | None = None
+    TELEGRAM_ALLOWED_UPDATES: list[str] = ["message", "edited_message"]
     DASHBOARD_FRONTEND_URL: str = "https://dashboard-fm-azure.vercel.app"
 
     # --- Database ---
@@ -42,6 +44,7 @@ class Settings(BaseSettings):
     TELEGRAM_QUEUE_WORKERS: int
     TELEGRAM_UPDATE_DEDUPE_TTL_SECONDS: int
     TELEGRAM_USER_QUEUE_LOCK_TTL_SECONDS: int
+    TELEGRAM_QUEUE_MAX_RETRIES: int = 3
 
     # --- Langfuse (Observability) ---
     LANGFUSE_SECRET_KEY: str | None = None

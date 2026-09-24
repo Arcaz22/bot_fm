@@ -246,6 +246,9 @@ class TestDetectIntent:
     def test_dashboard_on_balance_keyword(self):
         assert _detect_intent("cek balance") == "dashboard"
 
+    def test_unknown_natural_language_falls_back_to_transaction_parser(self):
+        assert _detect_intent("tolong catat pengeluaran saya") == "transaction"
+
 
 # ---------------------------------------------------------------------------
 # 2. Command Handling
