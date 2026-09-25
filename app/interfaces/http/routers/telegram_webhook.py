@@ -39,26 +39,29 @@ async def telegram_webhook(
     ),
 ):
     _verify_webhook_secret(telegram_secret)
+    # Send the acknowledgement before releasing the update to Redis. Otherwise
+    # a worker can finish the update and send its result before this message,
+    # because enqueue() wakes the worker immediately.
+    chat_id = update_queue.extract_chat_id(update)
+    if chat_id is not None:
+        try:
+            sent = await telegram_client.send_message(
+                chat_id,
+                "⏳ Pesan Anda sedang diproses...",
+                parse_mode="",
+            )
+            if not sent:
+                logger.warning(
+                    "Failed to send Telegram processing notification for chat_id=%s",
+                    chat_id,
+                )
+        except Exception:
+            logger.exception(
+                "Error while sending Telegram processing notification for chat_id=%s",
+                chat_id,
+            )
+
     queued = await update_queue.enqueue(update)
-    if queued:
-        chat_id = update_queue.extract_chat_id(update)
-        if chat_id is not None:
-            try:
-                sent = await telegram_client.send_message(
-                    chat_id,
-                    "⏳ Pesan Anda sedang diproses...",
-                    parse_mode="",
-                )
-                if not sent:
-                    logger.warning(
-                        "Failed to send Telegram processing notification for chat_id=%s",
-                        chat_id,
-                    )
-            except Exception:
-                logger.exception(
-                    "Error while sending Telegram processing notification for chat_id=%s",
-                    chat_id,
-                )
     message = "Update queued" if queued else "Duplicate or unsupported update ignored"
     return WebhookResponse(status="success", message=message)
 
