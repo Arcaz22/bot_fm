@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # Kode plan yang otomatis di-assign ke user baru saat /start.
     # Upgrade ke plan berbayar dilakukan lewat dashboard, bukan lewat bot ini.
     DEFAULT_FREE_PLAN_CODE: str
+    # Portfolio-safe default: all product features are available for demos and
+    # membership prices/checkout remain disabled until explicitly turned off.
+    PUBLIC_DEMO_MODE: bool = True
 
     # --- Subscription Email Scanner ---
     GMAIL_OAUTH_CLIENT_ID: str | None = None

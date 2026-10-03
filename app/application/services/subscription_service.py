@@ -45,6 +45,9 @@ class SubscriptionService:
         self.gmail_client = gmail_client or GmailClient()
 
     async def ensure_email_account_limit(self, user_id: int) -> None:
+        if settings.PUBLIC_DEMO_MODE:
+            return
+
         subscription = await self.membership_repo.get_active_subscription(user_id)
         if not subscription:
             subscription = await self.membership_repo.ensure_free_subscription(user_id)

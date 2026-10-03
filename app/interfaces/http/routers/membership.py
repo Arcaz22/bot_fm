@@ -3,6 +3,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 
 from app.core.di import get_membership_repo
+from app.core.settings import settings
 from app.domain.membership.rules import resolve_usage_period
 from app.infrastructure.db.models import SysTelegramUser
 from app.infrastructure.db.repositories.membership import SqlMembershipRepo
@@ -42,13 +43,14 @@ async def get_membership_subscription(
         used = await membership_repo.get_usage(
             current_user.id, feature.feature_key, period_start, period_end
         )
-        remaining = None if feature.limit_value is None else max(feature.limit_value - used, 0)
+        limit_value = None if settings.PUBLIC_DEMO_MODE else feature.limit_value
+        remaining = None if limit_value is None else max(limit_value - used, 0)
         features.append(
             FeatureUsage(
                 feature_key=feature.feature_key,
-                is_enabled=feature.is_enabled,
-                limit_value=feature.limit_value,
-                limit_period=feature.limit_period,
+                is_enabled=True if settings.PUBLIC_DEMO_MODE else feature.is_enabled,
+                limit_value=limit_value,
+                limit_period=None if settings.PUBLIC_DEMO_MODE else feature.limit_period,
                 used=used,
                 remaining=remaining,
             )
@@ -57,7 +59,7 @@ async def get_membership_subscription(
     return ActiveSubscription(
         plan_code=plan.code,
         plan_name=plan.name,
-        price=float(plan.price),
+        price=None if settings.PUBLIC_DEMO_MODE else float(plan.price),
         billing_period=plan.billing_period,
         status=subscription.status,
         started_at=subscription.started_at,
@@ -80,7 +82,7 @@ async def get_membership_plans(
             PlanDetail(
                 code=plan.code,
                 name=plan.name,
-                price=float(plan.price),
+                price=None if settings.PUBLIC_DEMO_MODE else float(plan.price),
                 billing_period=plan.billing_period,
                 features=[
                     PlanFeatureDetail(
@@ -113,7 +115,7 @@ async def get_membership_payments(
                 plan_name=payment.plan.name,
                 provider=payment.provider,
                 provider_reference=payment.provider_reference,
-                amount=float(payment.amount),
+                amount=None if settings.PUBLIC_DEMO_MODE else float(payment.amount),
                 status=payment.status,
                 paid_at=payment.paid_at,
                 created_at=payment.created_at,

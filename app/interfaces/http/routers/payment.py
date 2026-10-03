@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.di import get_payment_service
+from app.core.settings import settings
 from app.application.services.payment_service import PaymentService
 from app.infrastructure.db.models import SysTelegramUser
 from app.interfaces.http.routers.dashboard import get_current_dashboard_user
@@ -61,6 +62,12 @@ async def create_checkout(
     });
     ```
     """
+    if settings.PUBLIC_DEMO_MODE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Checkout dinonaktifkan pada mode demo portofolio.",
+        )
+
     try:
         result = await payment_service.create_checkout(
             telegram_user_id=current_user.id,

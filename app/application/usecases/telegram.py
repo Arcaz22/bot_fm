@@ -246,6 +246,9 @@ class HandleTelegramUpdate:
         """Cek limit fitur (mis. ai_parse_transaction, receipt_scan)
         berdasarkan plan aktif user di membership. True kalau boleh lanjut,
         dan otomatis increment usage-nya."""
+        if settings.PUBLIC_DEMO_MODE:
+            return True
+
         subscription = await self.membership_repo.get_active_subscription(user.id)
         if not subscription:
             # Pengaman: harusnya tidak pernah kejadian karena /start sudah

@@ -16,7 +16,7 @@ class FeatureUsage(BaseModel):
 class ActiveSubscription(BaseModel):
     plan_code: str
     plan_name: str
-    price: float
+    price: Optional[float]
     billing_period: str
     status: str
     started_at: datetime
@@ -35,7 +35,7 @@ class PlanFeatureDetail(BaseModel):
 class PlanDetail(BaseModel):
     code: str
     name: str
-    price: float
+    price: Optional[float]
     billing_period: str
     features: List[PlanFeatureDetail]
 
@@ -50,7 +50,7 @@ class PaymentItem(BaseModel):
     plan_name: str
     provider: str
     provider_reference: Optional[str]
-    amount: float
+    amount: Optional[float]
     status: str
     paid_at: Optional[datetime]
     created_at: datetime
