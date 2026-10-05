@@ -83,7 +83,7 @@ jobs:
             "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_SLOT='$DEPLOY_SLOT' IMAGE_TAG='$IMAGE_TAG' bash -s" <<'REMOTE_SCRIPT'
           set -euo pipefail
           cd "$DEPLOY_PATH"
-          export COMPOSE_PROJECT_NAME="infrastructure-${DEPLOY_SLOT}"
+          export COMPOSE_PROJECT_NAME="infrastructure"
           export FINANCE_IMAGE_TAG="$IMAGE_TAG"
           docker compose config -q
           docker compose pull app-finance
